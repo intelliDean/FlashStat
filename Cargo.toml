@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "bin/flashstat",
     "crates/flashstat-core",
     "crates/flashstat-api",
     "crates/flashstat-db",
