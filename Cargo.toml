@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.dependencies]
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["full", "signal"] }
 ethers = { version = "2.0", features = ["ws", "rustls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -19,3 +19,6 @@ tracing-subscriber = { version = "0.3", features = ["json"] }
 chrono = "0.4"
 rocksdb = "0.21"
 async-trait = "0.1"
+config = "0.13"
+toml = "0.7"
+futures-util = "0.3"

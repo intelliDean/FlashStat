@@ -1,0 +1,9 @@
+# FlashStat Configuration
+# 🏮 The Transparency Layer for Unichain
+
+[rpc]
+ws_url = "wss://sepolia.unichain.org"
+http_url = "https://sepolia.unichain.org"
+
+[storage]
+db_path = "./data/flashstat_db"

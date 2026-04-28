@@ -1,6 +1,7 @@
 use ethers::types::{H256, U256, Bytes};
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use config::{Config as ConfigLoader, ConfigError, File};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlashBlock {
@@ -32,6 +33,34 @@ pub struct ReorgEvent {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum ReorgSeverity {
-    Soft,   // Sub-block hash change (equivocation)
-    Deep,   // Multiple blocks replaced
+    Soft,
+    Deep,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct Config {
+    pub rpc: RpcConfig,
+    pub storage: StorageConfig,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct RpcConfig {
+    pub ws_url: String,
+    pub http_url: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct StorageConfig {
+    pub db_path: String,
+}
+
+impl Config {
+    pub fn load() -> Result<Self, ConfigError> {
+        let s = ConfigLoader::builder()
+            .add_source(File::with_name("flashstat").required(false))
+            .add_source(config::Environment::with_prefix("FLASHSTAT").separator("__"))
+            .build()?;
+
+        s.try_deserialize()
+    }
 }
