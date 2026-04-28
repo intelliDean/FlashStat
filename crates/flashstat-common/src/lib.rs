@@ -1,4 +1,4 @@
-use ethers::types::{H256, U256, Bytes};
+use ethers::types::{H256, U256, Bytes, Address};
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 use config::{Config as ConfigLoader, ConfigError, File};
@@ -41,6 +41,12 @@ pub enum ReorgSeverity {
 pub struct Config {
     pub rpc: RpcConfig,
     pub storage: StorageConfig,
+    pub tee: TeeConfig,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct TeeConfig {
+    pub sequencer_address: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]

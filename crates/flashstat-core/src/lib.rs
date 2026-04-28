@@ -1,4 +1,6 @@
 use flashstat_common::{FlashBlock, BlockStatus, ReorgEvent, ReorgSeverity, Config};
+pub mod tee;
+use tee::TeeVerifier;
 use flashstat_db::{FlashStorage, RocksStorage};
 use ethers::prelude::*;
 use eyre::{Result, Context};
@@ -14,17 +16,23 @@ pub struct FlashMonitor {
     storage: Arc<dyn FlashStorage>,
     last_block: Arc<Mutex<Option<FlashBlock>>>,
     shutdown_rx: broadcast::Receiver<()>,
+    tee_verifier: TeeVerifier,
 }
 
 impl FlashMonitor {
     pub async fn new(config: Config, shutdown_rx: broadcast::Receiver<()>) -> Result<Self> {
         let storage = Arc::new(RocksStorage::new(&config.storage.db_path)?);
         
+        let sequencer_address: Address = config.tee.sequencer_address.parse()
+            .context("Invalid sequencer address in config")?;
+        let tee_verifier = TeeVerifier::new(sequencer_address);
+
         Ok(Self {
             config,
             storage,
             last_block: Arc::new(Mutex::new(None)),
             shutdown_rx,
+            tee_verifier,
         })
     }
 
@@ -95,14 +103,39 @@ impl FlashMonitor {
             }
         }
 
-        let confidence = (1.0 - 0.5f64.powi(persistence as i32)) * 100.0;
+        let mut sequencer_signature = None;
+        let mut tee_valid = false;
+
+        // In a production Unichain environment, the signature would be extracted 
+        // from the block's extra_data or a custom RPC field.
+        // For this POC, we check if the signature is present and valid.
+        if let Some(sig_bytes) = extract_signature_from_block(&eth_block) {
+            if let Ok(valid) = self.tee_verifier.verify_sequencer_signature(hash, &sig_bytes) {
+                tee_valid = valid;
+                sequencer_signature = Some(sig_bytes);
+                if tee_valid {
+                    info!("🛡️ TEE Signature Verified for block #{}", number);
+                } else {
+                    warn!("⚠️ Invalid TEE Signature for block #{}", number);
+                }
+            }
+        }
+
+        // Boost confidence if TEE signature is valid
+        let base_confidence = (1.0 - 0.5f64.powi(persistence as i32)) * 100.0;
+        let confidence = if tee_valid {
+            // TEE verification significantly accelerates "Soft Finality"
+            (base_confidence + 99.0) / 2.0 
+        } else {
+            base_confidence
+        };
         
         let flash_block = FlashBlock {
             number,
             hash,
             parent_hash: eth_block.parent_hash,
             timestamp: Utc::now(),
-            sequencer_signature: None,
+            sequencer_signature,
             confidence,
             status: if confidence > 95.0 { BlockStatus::Stable } else { BlockStatus::Pending },
         };
@@ -114,4 +147,11 @@ impl FlashMonitor {
         
         Ok(())
     }
+}
+
+/// Helper to simulate extracting the TEE signature from a block.
+/// In Unichain, this is typically found in the extra_data or a custom header.
+fn extract_signature_from_block(_block: &Block<H256>) -> Option<Bytes> {
+    // TODO: Implement actual extraction logic for Unichain
+    None
 }

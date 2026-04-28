@@ -7,3 +7,7 @@ http_url = "https://sepolia.unichain.org"
 
 [storage]
 db_path = "./data/flashstat_db"
+
+[tee]
+# Placeholder for the Unichain sequencer TEE address
+sequencer_address = "0x0000000000000000000000000000000000000000"
