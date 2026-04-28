@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "bin/flashstat",
+    "bin/flashstat-server",
     "crates/flashstat-core",
     "crates/flashstat-api",
     "crates/flashstat-db",
@@ -22,3 +23,4 @@ async-trait = "0.1"
 config = "0.13"
 toml = "0.7"
 futures-util = "0.3"
+jsonrpsee = { version = "0.20", features = ["server", "macros"] }

@@ -25,6 +25,12 @@ impl RocksStorage {
         let db = DB::open(&opts, path)?;
         Ok(Self { db: Arc::new(db) })
     }
+
+    pub fn new_readonly(path: &str) -> Result<Self> {
+        let mut opts = Options::default();
+        let db = DB::open_for_read_only(&opts, path, false)?;
+        Ok(Self { db: Arc::new(db) })
+    }
 }
 
 #[async_trait]

@@ -1,6 +1,11 @@
 [package]
 name = "flashstat-api"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
+flashstat-common = { path = "../flashstat-common" }
+jsonrpsee = { workspace = true }
+ethers = { workspace = true }
+eyre = { workspace = true }
+serde = { workspace = true }

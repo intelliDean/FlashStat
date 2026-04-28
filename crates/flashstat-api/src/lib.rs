@@ -1,14 +1,16 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+use jsonrpsee::proc_macros::rpc;
+use flashstat_common::{FlashBlock, ReorgEvent};
+use ethers::types::H256;
+use eyre::Result;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[rpc(server, client, namespace = "flash")]
+pub trait FlashApi {
+    #[method(name = "getConfidence")]
+    async fn get_confidence(&self, hash: H256) -> Result<f64, jsonrpsee::core::Error>;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+    #[method(name = "getLatestBlock")]
+    async fn get_latest_block(&self) -> Result<Option<FlashBlock>, jsonrpsee::core::Error>;
+
+    #[method(name = "getRecentReorgs")]
+    async fn get_recent_reorgs(&self, limit: usize) -> Result<Vec<ReorgEvent>, jsonrpsee::core::Error>;
 }
