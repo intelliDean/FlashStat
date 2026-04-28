@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/flashstat-core",
+    "crates/flashstat-api",
+    "crates/flashstat-db",
+    "crates/flashstat-common",
+]
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+ethers = { version = "2.0", features = ["ws", "rustls"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+eyre = "0.6"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json"] }
+chrono = "0.4"
+rocksdb = "0.21"
+async-trait = "0.1"
