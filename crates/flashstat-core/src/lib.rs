@@ -8,7 +8,7 @@ pub mod wallet;
 use chrono::Utc;
 use ethers::prelude::*;
 use eyre::Result;
-use flashstat_db::{FlashStorage, RedbStorage};
+use flashstat_db::FlashStorage;
 use futures_util::StreamExt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -172,18 +172,27 @@ impl FlashMonitor {
 
                         // Phase 5: Optional TDX Attestation Check
                         if self.config.tee.attestation_enabled {
-                            let quote = extract_quote_from_block(&eth_block);
-                            if let Ok(valid) = self.tee_verifier.verify_tdx_attestation(
-                                &quote.unwrap_or_default(),
-                                self.config.tee.expected_mrenclave.as_deref(),
-                            ) {
-                                if valid {
-                                    confidence = 99.0;
-                                    info!("🛡️ TDX Attestation Verified for block #{}", number);
-                                } else {
-                                    confidence = 45.0;
-                                    warn!("⚠️ TEE Signature valid but Attestation FAILED for block #{}", number);
+                            if let Some(quote) = extract_quote_from_block(&eth_block) {
+                                match self.tee_verifier.verify_tdx_attestation(
+                                    &quote,
+                                    self.config.tee.expected_mrenclave.as_deref(),
+                                ) {
+                                    Ok(true) => {
+                                        confidence = 99.0;
+                                        info!("🛡️ TDX Attestation Verified for block #{}", number);
+                                    }
+                                    Ok(false) => {
+                                        confidence = 45.0;
+                                        warn!("⚠️ TEE Signature valid but Attestation Check FAILED for block #{}", number);
+                                    }
+                                    Err(e) => {
+                                        confidence = 70.0;
+                                        warn!("⚠️ TEE Signature valid but Attestation verification ERROR for block #{}: {:?}", number, e);
+                                    }
                                 }
+                            } else {
+                                confidence = 85.0;
+                                warn!("⚠️ Attestation enabled but NO quote found in block #{}", number);
                             }
                         }
                     } else {
@@ -401,9 +410,29 @@ fn extract_signature_from_block(block: &Block<H256>) -> Option<Bytes> {
 }
 
 /// Helper to extract the TEE attestation quote from a block.
-fn extract_quote_from_block(_block: &Block<H256>) -> Option<Bytes> {
-    // TODO: Implement actual extraction logic for Unichain (e.g. from RLP-encoded extra data)
-    None
+/// In Unichain, the quote may be present in extra_data or a custom header.
+fn extract_quote_from_block(block: &Block<H256>) -> Option<Bytes> {
+    let extra_data = &block.extra_data;
+    
+    // OP-Stack extra_data structure: [32-byte zero prefix] [65-byte signature] [optional quote]
+    // If the data is longer than 32 + 65, the remainder might be the quote.
+    if extra_data.len() > 97 {
+        let quote = &extra_data[97..];
+        Some(Bytes::from(quote.to_vec()))
+    } else {
+        // Fallback: check if the extra_data itself is an RLP list containing the quote
+        let rlp = ethers::utils::rlp::Rlp::new(extra_data);
+        if rlp.is_list() && rlp.item_count().unwrap_or(0) >= 2 {
+            if let Ok(quote_item) = rlp.at(1) {
+                if let Ok(quote_bytes) = quote_item.as_val::<Vec<u8>>() {
+                    if quote_bytes.len() > 128 {
+                        return Some(Bytes::from(quote_bytes));
+                    }
+                }
+            }
+        }
+        None
+    }
 }
 
 async fn analyze_and_update_equivocation(

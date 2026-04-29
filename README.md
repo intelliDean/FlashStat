@@ -9,14 +9,13 @@ FlashStat is built as a high-performance Rust monorepo:
 - **`bin/flashstat`**: The primary indexing engine. Subscribes to 200ms Flashblocks via WebSockets.
 - **`bin/flashstat-server`**: JSON-RPC server providing confidence metrics.
 - **`crates/flashstat-core`**: Core monitoring and reorg detection logic.
-- **`crates/flashstat-db`**: Ultra-low latency persistence layer using RocksDB.
+- **`crates/flashstat-db`**: Ultra-low latency persistence layer using redb (pure-Rust).
 - **`crates/flashstat-api`**: Type-safe JSON-RPC interface definitions.
 
 ## 🚀 Getting Started
 
 ### Prerequisites
 - Rust (Latest Stable)
-- LLVM/Clang (for RocksDB)
 
 ### Configuration
 Edit `flashstat.toml` or set environment variables:
