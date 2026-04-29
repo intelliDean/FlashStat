@@ -454,7 +454,7 @@ fn extract_signature_from_block(block: &Block<H256>) -> Option<Bytes> {
 /// In Unichain, the quote may be present in extra_data or a custom header.
 fn extract_quote_from_block(block: &Block<H256>) -> Option<Bytes> {
     let extra_data = &block.extra_data;
-
+    
     // OP-Stack extra_data structure: [32-byte zero prefix] [65-byte signature] [optional quote]
     // If the data is longer than 32 + 65, the remainder might be the quote.
     if extra_data.len() > 97 {
