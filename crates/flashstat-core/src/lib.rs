@@ -29,9 +29,11 @@ pub struct FlashMonitor {
 }
 
 impl FlashMonitor {
-    pub async fn new(config: Config, shutdown_rx: broadcast::Receiver<()>) -> Result<Self> {
-        let storage = Arc::new(RedbStorage::new(&config.storage.db_path)?);
-
+    pub async fn new(
+        config: Config,
+        storage: Arc<dyn FlashStorage>,
+        shutdown_rx: broadcast::Receiver<()>,
+    ) -> Result<Self> {
         let sequencer_address: Address = config.tee.sequencer_address;
         let tee_verifier = TeeVerifier::new(sequencer_address);
 
@@ -40,11 +42,14 @@ impl FlashMonitor {
 
         let provider = Arc::new(Provider::<Http>::try_from(&config.rpc.http_url)?);
 
-        let guardian_wallet = if config.guardian.private_key.is_some() || config.guardian.keystore_path.is_some() {
-            Some(Arc::new(wallet::GuardianWallet::new(&config.guardian, &config.rpc.http_url).await?))
-        } else {
-            None
-        };
+        let guardian_wallet =
+            if config.guardian.private_key.is_some() || config.guardian.keystore_path.is_some() {
+                Some(Arc::new(
+                    wallet::GuardianWallet::new(&config.guardian, &config.rpc.http_url).await?,
+                ))
+            } else {
+                None
+            };
 
         Ok(Self {
             config,
@@ -253,7 +258,10 @@ impl FlashMonitor {
                         let sig1 = prev.sequencer_signature.clone().unwrap_or_default();
                         let sig2 = sequencer_signature.clone().unwrap_or_default();
                         let signer_addr = signer.unwrap_or_default();
-                        
+                        let old_hash = prev.hash;
+                        let new_hash = hash;
+                        let block_number = number;
+
                         tokio::spawn(async move {
                             if let Err(e) =
                                 analyze_and_update_equivocation(storage, provider, event_clone)
@@ -266,16 +274,21 @@ impl FlashMonitor {
                             if let Some(wallet) = guardian {
                                 info!("🗼 Watchtower: Generating on-chain equivocation proof...");
                                 let proof = proof::encode_equivocation_proof(
-                                    number,
+                                    block_number,
                                     signer_addr,
                                     sig1,
                                     sig2,
-                                    prev.hash,
-                                    hash,
+                                    old_hash,
+                                    new_hash,
                                 );
                                 match wallet.submit_equivocation_proof(proof).await {
-                                    Ok(tx_hash) => info!("🚀 ACTIVE PROTECTION: Slashing proof submitted! TX: {:?}", tx_hash),
-                                    Err(e) => error!("❌ Watchtower FAILED to submit proof: {:?}", e),
+                                    Ok(tx_hash) => info!(
+                                        "🚀 ACTIVE PROTECTION: Slashing proof submitted! TX: {:?}",
+                                        tx_hash
+                                    ),
+                                    Err(e) => {
+                                        error!("❌ Watchtower FAILED to submit proof: {:?}", e)
+                                    }
                                 }
                             }
                         });
@@ -286,8 +299,15 @@ impl FlashMonitor {
 
                     // Update Reputation Penalties
                     if let Some(signer_addr) = signer {
-                        let (soft, equiv) = if severity == ReorgSeverity::Equivocation { (0, 1) } else { (1, 0) };
-                        if let Err(e) = self.update_reputation(signer_addr, 0, soft, equiv, false).await {
+                        let (soft, equiv) = if severity == ReorgSeverity::Equivocation {
+                            (0, 1)
+                        } else {
+                            (1, 0)
+                        };
+                        if let Err(e) = self
+                            .update_reputation(signer_addr, 0, soft, equiv, false)
+                            .await
+                        {
                             error!("Failed to apply reputation penalty: {:?}", e);
                         }
                     }
@@ -334,11 +354,14 @@ impl FlashMonitor {
 
         self.storage.save_block(flash_block.clone()).await?;
         let _ = self.block_tx.send(flash_block.clone());
-        
+
         // Update Reputation
         if let Some(signer_addr) = signer {
             let attested = confidence > 95.0; // Phase 5 threshold
-            if let Err(e) = self.update_reputation(signer_addr, 1, 0, 0, attested).await {
+            if let Err(e) = self
+                .update_reputation(signer_addr, 1, 0, 0, attested)
+                .await
+            {
                 error!("Failed to update reputation: {:?}", e);
             }
         }
@@ -348,16 +371,30 @@ impl FlashMonitor {
         Ok(())
     }
 
-    async fn update_reputation(&self, address: Address, blocks: u64, soft_reorgs: u64, equivocations: u64, attested: bool) -> Result<()> {
-        let mut stats = self.storage.get_sequencer_stats(address).await?.unwrap_or(flashstat_common::SequencerStats {
-            address,
-            last_active: Utc::now(),
-            ..Default::default()
-        });
+    async fn update_reputation(
+        &self,
+        address: Address,
+        blocks: u64,
+        soft_reorgs: u64,
+        equivocations: u64,
+        attested: bool,
+    ) -> Result<()> {
+        let mut stats = self
+            .storage
+            .get_sequencer_stats(address)
+            .await?
+            .unwrap_or(flashstat_common::SequencerStats {
+                address,
+                last_active: Utc::now(),
+                ..Default::default()
+            });
 
         if blocks > 0 {
             stats.total_blocks_signed += blocks;
             stats.current_streak += blocks;
+            if attested {
+                stats.total_attested_blocks += blocks;
+            }
         }
 
         if soft_reorgs > 0 || equivocations > 0 {
@@ -370,11 +407,12 @@ impl FlashMonitor {
 
         // Calculate score with Refined Weights
         let base_score = (stats.total_blocks_signed as i64) * 1;
-        let attestation_bonus = if attested { 1 } else { 0 }; // Extra +1 for hardware-backed blocks
+        let attestation_bonus = (stats.total_attested_blocks as i64) * 1; // Permanent +1 for each hardware-backed block
         let streak_bonus = (stats.current_streak / 100) as i64 * 10;
-        
-        let penalty = (stats.total_soft_reorgs as i64 * 50) + (stats.total_equivocations as i64 * 1000);
-        
+
+        let penalty =
+            (stats.total_soft_reorgs as i64 * 50) + (stats.total_equivocations as i64 * 1000);
+
         stats.reputation_score = base_score + attestation_bonus + streak_bonus - penalty;
 
         self.storage.update_sequencer_stats(stats).await?;
@@ -462,4 +500,75 @@ async fn analyze_and_update_equivocation(
     storage.save_reorg(event).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flashstat_common::*;
+    use flashstat_db::RedbStorage;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_reputation_scoring() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("test.db");
+        let storage = Arc::new(RedbStorage::new(db_path.to_str().unwrap())?);
+
+        // Mock config
+        let config = Config {
+            rpc: RpcConfig {
+                ws_url: "http://localhost:8545".into(),
+                http_url: "http://localhost:8545".into(),
+            },
+            storage: StorageConfig {
+                db_path: db_path.to_str().unwrap().into(),
+            },
+            tee: TeeConfig {
+                sequencer_address: Address::random(),
+                attestation_enabled: false,
+                expected_mrenclave: None,
+            },
+            guardian: GuardianConfig {
+                private_key: None,
+                keystore_path: None,
+                slashing_contract: Address::random(),
+            },
+        };
+
+        let (_tx, rx) = broadcast::channel(1);
+        let monitor = FlashMonitor::new(config, storage.clone(), rx).await?;
+
+        let address = Address::random();
+
+        // 1. Reward: 100 blocks + attested
+        monitor.update_reputation(address, 100, 0, 0, true).await?;
+        let stats = storage.get_sequencer_stats(address).await?.unwrap();
+        // Base(100) + Attestation(100) + Streak(10) = 210
+        assert_eq!(stats.reputation_score, 210);
+        assert_eq!(stats.current_streak, 100);
+
+        // 2. Penalty: Equivocation
+        monitor.update_reputation(address, 0, 0, 1, false).await?;
+        let stats = storage.get_sequencer_stats(address).await?.unwrap();
+        // Base(100) + Attest(100) + Streak(0) - 1000 = -800
+        assert_eq!(stats.reputation_score, -800);
+        assert_eq!(stats.current_streak, 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_proof_serialization() {
+        use crate::proof;
+        let ds_proof = DoubleSpendProof {
+            tx_hash_1: H256::random(),
+            tx_hash_2: H256::random(),
+            sender: Address::random(),
+            nonce: U256::from(42),
+        };
+
+        let rlp_bytes = proof::encode_double_spend_proof(ds_proof);
+        assert!(!rlp_bytes.is_empty());
+    }
 }

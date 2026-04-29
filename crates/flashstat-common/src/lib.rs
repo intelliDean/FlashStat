@@ -74,6 +74,7 @@ pub struct SystemHealth {
 pub struct SequencerStats {
     pub address: Address,
     pub total_blocks_signed: u64,
+    pub total_attested_blocks: u64,
     pub total_soft_reorgs: u64,
     pub total_equivocations: u64,
     pub current_streak: u64,
