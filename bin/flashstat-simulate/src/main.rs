@@ -1,7 +1,9 @@
 use clap::Parser;
-use ethers::types::{Address, H256, U256, Bytes};
+use ethers::types::{Address, Bytes, H256, U256};
 use eyre::Result;
-use flashstat_common::{ConflictAnalysis, DoubleSpendProof, EquivocationEvent, ReorgEvent, ReorgSeverity};
+use flashstat_common::{
+    ConflictAnalysis, DoubleSpendProof, EquivocationEvent, ReorgEvent, ReorgSeverity,
+};
 use flashstat_db::{FlashStorage, RedbStorage};
 use std::sync::Arc;
 
@@ -23,7 +25,10 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let storage: Arc<dyn FlashStorage> = Arc::new(RedbStorage::new(&args.db_path)?);
 
-    println!("🏮 Injecting {} synthetic {} events into {}...", args.count, args.severity, args.db_path);
+    println!(
+        "🏮 Injecting {} synthetic {} events into {}...",
+        args.count, args.severity, args.db_path
+    );
 
     for i in 0..args.count {
         let block_number = 50_000_000 + i as u64;

@@ -1,5 +1,5 @@
 use ethers::prelude::*;
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 use hex;
 use tracing::debug;
 
@@ -50,17 +50,20 @@ impl TeeVerifier {
         expected_mrenclave: Option<&str>,
     ) -> Result<bool> {
         if quote.len() < 48 {
-            return Err(eyre!("Quote too short for TDX V4: expected >= 48 bytes, got {}", quote.len()));
+            return Err(eyre!(
+                "Quote too short for TDX V4: expected >= 48 bytes, got {}",
+                quote.len()
+            ));
         }
 
         // TDX Quote V4 Header check
         let version = u16::from_le_bytes([quote[0], quote[1]]);
         let att_type = u16::from_le_bytes([quote[2], quote[3]]);
-        
+
         if version != 4 {
             return Err(eyre!("Unsupported TDX Quote version: {}", version));
         }
-        
+
         // Attestation Type 2 = TDX
         if att_type != 2 {
             debug!("Quote is not a TDX attestation type: {}", att_type);
@@ -73,13 +76,15 @@ impl TeeVerifier {
             if quote.len() < 128 {
                 return Err(eyre!("Quote too short for TD Report extraction"));
             }
-            
+
             let mrenclave_bytes = &quote[96..128];
             let actual_mrenclave = hex::encode(mrenclave_bytes);
-            
+
             let is_match = actual_mrenclave == expected;
-            debug!("TDX MRENCLAVE Check | Actual: {} | Expected: {} | Match: {}", 
-                actual_mrenclave, expected, is_match);
+            debug!(
+                "TDX MRENCLAVE Check | Actual: {} | Expected: {} | Match: {}",
+                actual_mrenclave, expected, is_match
+            );
             return Ok(is_match);
         }
 
