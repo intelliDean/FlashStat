@@ -17,6 +17,8 @@ pub struct FlashMonitor {
     last_block: Arc<Mutex<Option<FlashBlock>>>,
     shutdown_rx: broadcast::Receiver<()>,
     tee_verifier: TeeVerifier,
+    block_tx: broadcast::Sender<FlashBlock>,
+    event_tx: broadcast::Sender<ReorgEvent>,
 }
 
 impl FlashMonitor {
@@ -26,6 +28,9 @@ impl FlashMonitor {
         let sequencer_address: Address = config.tee.sequencer_address.parse()
             .context("Invalid sequencer address in config")?;
         let tee_verifier = TeeVerifier::new(sequencer_address);
+        
+        let (block_tx, _) = broadcast::channel(100);
+        let (event_tx, _) = broadcast::channel(100);
 
         Ok(Self {
             config,
@@ -33,7 +38,21 @@ impl FlashMonitor {
             last_block: Arc::new(Mutex::new(None)),
             shutdown_rx,
             tee_verifier,
+            block_tx,
+            event_tx,
         })
+    }
+
+    pub fn block_notifier(&self) -> broadcast::Sender<FlashBlock> {
+        self.block_tx.clone()
+    }
+
+    pub fn event_notifier(&self) -> broadcast::Sender<ReorgEvent> {
+        self.event_tx.clone()
+    }
+
+    pub fn storage(&self) -> Arc<dyn FlashStorage> {
+        self.storage.clone()
     }
 
     pub async fn run(&mut self) -> Result<()> {
@@ -158,7 +177,8 @@ impl FlashMonitor {
                         });
                     }
 
-                    self.storage.save_reorg(event).await?;
+                    self.storage.save_reorg(event.clone()).await?;
+                    let _ = self.event_tx.send(event);
                 } else {
                     // Approximate persistence from previous confidence
                     persistence = ((prev.confidence / 100.0).log(0.5).abs().ceil() as u32).max(1) + 1;
@@ -189,6 +209,7 @@ impl FlashMonitor {
         info!("🏮 Block #{} | Confidence: {:.2}% | Hash: {}", number, confidence, hash);
         
         self.storage.save_block(flash_block.clone()).await?;
+        let _ = self.block_tx.send(flash_block.clone());
         *last_block_guard = Some(flash_block);
         
         Ok(())

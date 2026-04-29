@@ -18,4 +18,10 @@ pub trait FlashApi {
 
     #[method(name = "getEquivocations")]
     async fn get_equivocations(&self, limit: usize) -> RpcResult<Vec<ReorgEvent>>;
+
+    #[subscription(name = "subscribeBlocks", item = FlashBlock)]
+    async fn subscribe_blocks(&self) -> jsonrpsee::core::SubscriptionResult;
+
+    #[subscription(name = "subscribeEvents", item = ReorgEvent)]
+    async fn subscribe_events(&self) -> jsonrpsee::core::SubscriptionResult;
 }

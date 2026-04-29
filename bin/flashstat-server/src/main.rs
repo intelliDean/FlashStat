@@ -11,6 +11,8 @@ use tracing::info;
 
 pub struct FlashServer {
     storage: Arc<dyn FlashStorage>,
+    block_tx: broadcast::Sender<FlashBlock>,
+    event_tx: broadcast::Sender<ReorgEvent>,
 }
 
 #[async_trait]
@@ -37,6 +39,36 @@ impl FlashApiServer for FlashServer {
         self.storage.get_equivocations(limit).await
             .map_err(|e| ErrorObjectOwned::owned(-32603, e.to_string(), None::<()>))
     }
+
+    async fn subscribe_blocks(&self, pending: jsonrpsee::PendingSubscriptionSink) -> jsonrpsee::core::SubscriptionResult {
+        let mut rx = self.block_tx.subscribe();
+        let sink = pending.accept().await?;
+        
+        tokio::spawn(async move {
+            while let Ok(block) = rx.recv().await {
+                if sink.send(block).await.is_err() {
+                    break;
+                }
+            }
+        });
+        
+        Ok(())
+    }
+
+    async fn subscribe_events(&self, pending: jsonrpsee::PendingSubscriptionSink) -> jsonrpsee::core::SubscriptionResult {
+        let mut rx = self.event_tx.subscribe();
+        let sink = pending.accept().await?;
+        
+        tokio::spawn(async move {
+            while let Ok(event) = rx.recv().await {
+                if sink.send(event).await.is_err() {
+                    break;
+                }
+            }
+        });
+        
+        Ok(())
+    }
 }
 
 #[tokio::main]
@@ -44,12 +76,32 @@ async fn main() -> eyre::Result<()> {
     tracing_subscriber::fmt::init();
 
     let config = Config::load().context("Failed to load config")?;
-    let storage = Arc::new(RocksStorage::new_readonly(&config.storage.db_path)?);
     
-    let server = ServerBuilder::default().build("127.0.0.1:9944").await?;
-    let handle = server.start(FlashServer { storage }.into_rpc());
+    // 1. Initialize Shutdown Signal
+    let (shutdown_tx, _) = broadcast::channel(1);
+    
+    // 2. Initialize Monitor (which manages storage)
+    let mut monitor = flashstat_core::FlashMonitor::new(config.clone(), shutdown_tx.subscribe()).await?;
+    let storage = monitor.storage();
+    let block_tx = monitor.block_notifier();
+    let event_tx = monitor.event_notifier();
 
-    info!("🏮 FlashStat JSON-RPC Server started at 127.0.0.1:9944");
+    // 3. Start Monitor in background
+    tokio::spawn(async move {
+        if let Err(e) = monitor.run().await {
+            tracing::error!("Monitor error: {:?}", e);
+        }
+    });
+    
+    // 4. Start JSON-RPC Server with Pub/Sub support
+    let server = ServerBuilder::default().build("127.0.0.1:9944").await?;
+    let handle = server.start(FlashServer { 
+        storage,
+        block_tx,
+        event_tx 
+    }.into_rpc());
+
+    info!("🏮 FlashStat JSON-RPC Server (with Pub/Sub) started at 127.0.0.1:9944");
 
     handle.stopped().await;
     Ok(())
