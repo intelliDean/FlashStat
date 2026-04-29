@@ -1,0 +1,16 @@
+[package]
+name = "flashstat-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+flashstat-api = { path = "../../crates/flashstat-api" }
+flashstat-common = { path = "../../crates/flashstat-common" }
+flashstat-db = { path = "../../crates/flashstat-db" }
+flashstat-core = { path = "../../crates/flashstat-core" }
+jsonrpsee = { workspace = true }
+tokio = { workspace = true }
+ethers = { workspace = true }
+eyre = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
