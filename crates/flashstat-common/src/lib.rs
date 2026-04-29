@@ -72,6 +72,8 @@ pub struct Config {
 #[derive(Debug, Deserialize, Clone)]
 pub struct TeeConfig {
     pub sequencer_address: Address,
+    pub attestation_enabled: bool,
+    pub expected_mrenclave: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

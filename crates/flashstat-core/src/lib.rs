@@ -116,7 +116,25 @@ impl FlashMonitor {
                     sequencer_signature = Some(sig_bytes);
                     
                     if tee_valid {
+                        confidence = 90.0;
                         info!("🛡️ TEE Signature Verified for block #{} by expected sequencer", number);
+
+                        // Phase 5: Optional TDX Attestation Check
+                        if self.config.tee.attestation_enabled {
+                            let quote = extract_quote_from_block(&eth_block);
+                            if let Ok(valid) = self.tee_verifier.verify_tdx_attestation(
+                                &quote.unwrap_or_default(),
+                                self.config.tee.expected_mrenclave.as_deref()
+                            ) {
+                                if valid {
+                                    confidence = 99.0;
+                                    info!("🛡️ TDX Attestation Verified for block #{}", number);
+                                } else {
+                                    confidence = 45.0;
+                                    warn!("⚠️ TEE Signature valid but Attestation FAILED for block #{}", number);
+                                }
+                            }
+                        }
                     } else {
                         warn!("⚠️ TEE Signature valid but from unexpected signer: {:?}", recovered_signer);
                     }
@@ -220,6 +238,12 @@ impl FlashMonitor {
 /// In Unichain, this is typically found in the extra_data or a custom header.
 fn extract_signature_from_block(_block: &Block<H256>) -> Option<Bytes> {
     // TODO: Implement actual extraction logic for Unichain
+    None
+}
+
+/// Helper to extract the TEE attestation quote from a block.
+fn extract_quote_from_block(_block: &Block<H256>) -> Option<Bytes> {
+    // TODO: Implement actual extraction logic for Unichain (e.g. from RLP-encoded extra data)
     None
 }
 
