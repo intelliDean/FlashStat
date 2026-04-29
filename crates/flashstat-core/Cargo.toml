@@ -1,0 +1,19 @@
+[package]
+name = "flashstat-core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+flashstat-common = { path = "../flashstat-common" }
+flashstat-db = { path = "../flashstat-db" }
+ethers = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+eyre = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono = { workspace = true }

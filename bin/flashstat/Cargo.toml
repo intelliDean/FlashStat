@@ -1,0 +1,14 @@
+[package]
+name = "flashstat"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "flashstat"
+path = "src/main.rs"
+
+[dependencies]
+flashstat-core = { path = "../../crates/flashstat-core" }
+tokio = { workspace = true }
+eyre = { workspace = true }
+tracing-subscriber = { workspace = true }

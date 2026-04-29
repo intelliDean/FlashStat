@@ -1,0 +1,22 @@
+# FlashStat Configuration
+# 🏮 The Transparency Layer for Unichain
+
+[rpc]
+ws_url = "wss://unichain-sepolia.api.onfinality.io/public-ws"
+http_url = "https://sepolia.unichain.org"
+
+[storage]
+db_path = "./data/flashstat_db"
+
+[tee]
+# Placeholder for the Unichain sequencer TEE address
+sequencer_address = "0x0000000000000000000000000000000000000000"
+attestation_enabled = false
+expected_mrenclave = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[guardian]
+# Private key for the guardian wallet (use environment variables in production!)
+# FLASHSTAT__GUARDIAN__PRIVATE_KEY
+private_key = ""
+# Address of the Unichain SlashingManager contract
+slashing_contract = "0x0000000000000000000000000000000000000000"
