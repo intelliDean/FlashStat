@@ -2,7 +2,6 @@ use ethers::prelude::*;
 use eyre::{Result, eyre};
 use std::sync::Arc;
 use flashstat_common::GuardianConfig;
-use std::str::FromStr;
 
 abigen!(
     SlashingManager,
@@ -13,7 +12,6 @@ abigen!(
 );
 
 pub struct GuardianWallet {
-    client: Arc<SignerMiddleware<Provider<Http>, LocalWallet>>,
     contract: SlashingManager<SignerMiddleware<Provider<Http>, LocalWallet>>,
 }
 
@@ -24,17 +22,18 @@ impl GuardianWallet {
 
         let wallet = if let Some(pk) = &config.private_key {
             pk.parse::<LocalWallet>()?.with_chain_id(chain_id)
-        } else if let Some(_path) = &config.keystore_path {
-            // Placeholder for keystore logic - would require password prompt
-            return Err(eyre!("Keystore support requires interactive password. Use private_key for now."));
+        } else if let Some(path) = &config.keystore_path {
+            let password = std::env::var("FLASHSTAT__GUARDIAN__PASSWORD")
+                .map_err(|_| eyre!("Keystore configured but FLASHSTAT__GUARDIAN__PASSWORD not set"))?;
+            LocalWallet::decrypt_keystore(path, password)?.with_chain_id(chain_id)
         } else {
             return Err(eyre!("No guardian wallet configured"));
         };
 
         let client = Arc::new(SignerMiddleware::new(provider, wallet));
-        let contract = SlashingManager::new(config.slashing_contract, client.clone());
+        let contract = SlashingManager::new(config.slashing_contract, client);
 
-        Ok(Self { client, contract })
+        Ok(Self { contract })
     }
 
     pub async fn submit_equivocation_proof(&self, proof_bytes: Vec<u8>) -> Result<H256> {
