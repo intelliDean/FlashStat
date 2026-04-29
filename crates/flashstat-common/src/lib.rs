@@ -76,6 +76,7 @@ pub struct SequencerStats {
     pub total_blocks_signed: u64,
     pub total_soft_reorgs: u64,
     pub total_equivocations: u64,
+    pub current_streak: u64,
     pub reputation_score: i64,
     pub last_active: DateTime<Utc>,
 }

@@ -255,7 +255,7 @@ impl FlashMonitor {
                     // Update Reputation Penalties
                     if let Some(signer_addr) = signer {
                         let (soft, equiv) = if severity == ReorgSeverity::Equivocation { (0, 1) } else { (1, 0) };
-                        if let Err(e) = self.update_reputation(signer_addr, 0, soft, equiv).await {
+                        if let Err(e) = self.update_reputation(signer_addr, 0, soft, equiv, false).await {
                             error!("Failed to apply reputation penalty: {:?}", e);
                         }
                     }
@@ -305,7 +305,8 @@ impl FlashMonitor {
         
         // Update Reputation
         if let Some(signer_addr) = signer {
-            if let Err(e) = self.update_reputation(signer_addr, 1, 0, 0).await {
+            let attested = confidence > 95.0; // Phase 5 threshold
+            if let Err(e) = self.update_reputation(signer_addr, 1, 0, 0, attested).await {
                 error!("Failed to update reputation: {:?}", e);
             }
         }
@@ -315,21 +316,34 @@ impl FlashMonitor {
         Ok(())
     }
 
-    async fn update_reputation(&self, address: Address, blocks: u64, soft_reorgs: u64, equivocations: u64) -> Result<()> {
+    async fn update_reputation(&self, address: Address, blocks: u64, soft_reorgs: u64, equivocations: u64, attested: bool) -> Result<()> {
         let mut stats = self.storage.get_sequencer_stats(address).await?.unwrap_or(flashstat_common::SequencerStats {
             address,
             last_active: Utc::now(),
             ..Default::default()
         });
 
-        stats.total_blocks_signed += blocks;
-        stats.total_soft_reorgs += soft_reorgs;
-        stats.total_equivocations += equivocations;
+        if blocks > 0 {
+            stats.total_blocks_signed += blocks;
+            stats.current_streak += blocks;
+        }
+
+        if soft_reorgs > 0 || equivocations > 0 {
+            stats.total_soft_reorgs += soft_reorgs;
+            stats.total_equivocations += equivocations;
+            stats.current_streak = 0; // Reset streak on any issue
+        }
+
         stats.last_active = Utc::now();
 
-        // Calculate score
-        let penalty = (soft_reorgs as i64 * 50) + (equivocations as i64 * 500);
-        stats.reputation_score = (stats.total_blocks_signed as i64) - (stats.total_soft_reorgs as i64 * 50) - (stats.total_equivocations as i64 * 500);
+        // Calculate score with Refined Weights
+        let base_score = (stats.total_blocks_signed as i64) * 1;
+        let attestation_bonus = if attested { 1 } else { 0 }; // Extra +1 for hardware-backed blocks
+        let streak_bonus = (stats.current_streak / 100) as i64 * 10;
+        
+        let penalty = (stats.total_soft_reorgs as i64 * 50) + (stats.total_equivocations as i64 * 1000);
+        
+        stats.reputation_score = base_score + attestation_bonus + streak_bonus - penalty;
 
         self.storage.update_sequencer_stats(stats).await?;
         Ok(())
