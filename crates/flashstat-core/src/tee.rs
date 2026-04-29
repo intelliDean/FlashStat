@@ -86,4 +86,3 @@ impl TeeVerifier {
         Ok(true)
     }
 }
-

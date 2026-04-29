@@ -29,5 +29,3 @@ futures-util = "0.3"
 jsonrpsee = { version = "0.20", features = ["server", "client", "macros"] }
 ratatui = "0.26"
 crossterm = { version = "0.27", features = ["event-stream"] }
-alloy-rlp = "0.3"
-alloy-rlp-derive = "0.3"

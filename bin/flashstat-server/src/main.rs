@@ -141,12 +141,10 @@ async fn main() -> eyre::Result<()> {
     // 1. Initialize Shutdown Signal
     let (shutdown_tx, _) = broadcast::channel(1);
 
-    // 2. Initialize Storage
-    let storage = std::sync::Arc::new(flashstat_db::RedbStorage::new(&config.storage.db_path)?);
-
-    // 3. Initialize Monitor
+    // 2. Initialize Monitor (which manages storage)
     let mut monitor =
-        flashstat_core::FlashMonitor::new(config.clone(), storage.clone(), shutdown_tx.subscribe()).await?;
+        flashstat_core::FlashMonitor::new(config.clone(), shutdown_tx.subscribe()).await?;
+    let storage = monitor.storage();
     let block_tx = monitor.block_notifier();
     let event_tx = monitor.event_notifier();
 
