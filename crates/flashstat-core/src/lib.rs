@@ -1,20 +1,21 @@
+use chrono::Utc;
+use ethers::prelude::*;
+use eyre::Result;
 use flashstat_common::{
     BlockStatus, Config, ConflictAnalysis, DoubleSpendProof, EquivocationEvent, FlashBlock,
     ReorgEvent, ReorgSeverity,
 };
-pub mod proof;
-pub mod tee;
-pub mod wallet;
-use chrono::Utc;
-use ethers::prelude::*;
-use eyre::Result;
 use flashstat_db::FlashStorage;
 use futures_util::StreamExt;
 use std::sync::Arc;
 use std::time::Duration;
 use tee::TeeVerifier;
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{broadcast, Mutex};
 use tracing::{error, info, warn};
+
+pub mod proof;
+pub mod tee;
+pub mod wallet;
 
 pub struct FlashMonitor {
     config: Config,

@@ -1,19 +1,19 @@
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use eyre::Result;
 use flashstat_api::FlashApiClient;
 use flashstat_common::{FlashBlock, ReorgEvent, SystemHealth};
 use jsonrpsee::http_client::HttpClientBuilder;
 use ratatui::{
-    Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph},
+    Frame, Terminal,
 };
 use std::{
     io,
@@ -202,15 +202,9 @@ fn ui(f: &mut Frame, app: &App) {
         .iter()
         .map(|b| {
             let content = vec![Line::from(vec![
-                Span::styled(
-                    format!("#{:<10}", b.number),
-                    Style::default().fg(Color::Cyan),
-                ),
+                Span::styled(format!("#{:<10}", b.number), Style::default().fg(Color::Cyan)),
                 Span::raw(" | "),
-                Span::styled(
-                    format!("{:.2}%", b.confidence),
-                    Style::default().fg(Color::Yellow),
-                ),
+                Span::styled(format!("{:.2}%", b.confidence), Style::default().fg(Color::Yellow)),
                 Span::raw(" | "),
                 Span::raw(format!("{}", b.hash)),
             ])];
@@ -218,11 +212,7 @@ fn ui(f: &mut Frame, app: &App) {
         })
         .collect();
 
-    let block_list = List::new(blocks).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("Live Block Feed"),
-    );
+    let block_list = List::new(blocks).block(Block::default().borders(Borders::ALL).title("Live Block Feed"));
     f.render_widget(block_list, main_chunks[0]);
 
     // Sequencer Reputation
@@ -230,16 +220,9 @@ fn ui(f: &mut Frame, app: &App) {
         .sequencers
         .iter()
         .map(|s| {
-            let score_color = if s.reputation_score >= 0 {
-                Color::Green
-            } else {
-                Color::Red
-            };
+            let score_color = if s.reputation_score >= 0 { Color::Green } else { Color::Red };
             let content = vec![Line::from(vec![
-                Span::styled(
-                    format!("{:.4}… ", s.address),
-                    Style::default().fg(Color::Gray),
-                ),
+                Span::styled(format!("{:.4}… ", s.address), Style::default().fg(Color::Gray)),
                 Span::styled(
                     format!("Score: {:<5}", s.reputation_score),
                     Style::default().fg(score_color),
@@ -249,11 +232,8 @@ fn ui(f: &mut Frame, app: &App) {
         })
         .collect();
 
-    let sequencer_list = List::new(sequencers).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("Sequencer Reputation"),
-    );
+    let sequencer_list =
+        List::new(sequencers).block(Block::default().borders(Borders::ALL).title("Sequencer Reputation"));
     f.render_widget(sequencer_list, main_chunks[1]);
 
     // Reorg Log
@@ -280,11 +260,7 @@ fn ui(f: &mut Frame, app: &App) {
         .collect();
 
     let reorg_list = List::new(reorgs)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Security Alerts"),
-        )
+        .block(Block::default().borders(Borders::ALL).title("Security Alerts"))
         .highlight_style(
             Style::default()
                 .add_modifier(Modifier::BOLD)

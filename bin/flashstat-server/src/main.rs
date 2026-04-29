@@ -3,7 +3,7 @@ use eyre::Context;
 use flashstat_api::FlashApiServer;
 use flashstat_common::{Config, FlashBlock, ReorgEvent};
 use flashstat_db::FlashStorage;
-use jsonrpsee::core::{RpcResult, async_trait};
+use jsonrpsee::core::{async_trait, RpcResult};
 use jsonrpsee::server::ServerBuilder;
 use jsonrpsee::types::error::ErrorObjectOwned;
 use std::sync::Arc;

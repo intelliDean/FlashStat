@@ -1,5 +1,5 @@
 use ethers::prelude::*;
-use eyre::{Result, eyre};
+use eyre::{eyre, Result};
 use hex;
 use tracing::debug;
 
