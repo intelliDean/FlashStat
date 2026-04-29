@@ -31,6 +31,11 @@ impl FlashApiServer for FlashServer {
         self.storage.get_latest_reorgs(limit).await
             .map_err(|e| ErrorObjectOwned::owned(-32603, e.to_string(), None::<()>))
     }
+
+    async fn get_equivocations(&self, limit: usize) -> RpcResult<Vec<ReorgEvent>> {
+        self.storage.get_equivocations(limit).await
+            .map_err(|e| ErrorObjectOwned::owned(-32603, e.to_string(), None::<()>))
+    }
 }
 
 #[tokio::main]

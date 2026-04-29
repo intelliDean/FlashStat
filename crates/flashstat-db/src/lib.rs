@@ -12,6 +12,7 @@ pub trait FlashStorage: Send + Sync {
     async fn get_block(&self, hash: H256) -> Result<Option<FlashBlock>>;
     async fn save_reorg(&self, event: ReorgEvent) -> Result<()>;
     async fn get_latest_reorgs(&self, limit: usize) -> Result<Vec<ReorgEvent>>;
+    async fn get_equivocations(&self, limit: usize) -> Result<Vec<ReorgEvent>>;
 }
 
 pub struct RocksStorage {
@@ -53,15 +54,55 @@ impl FlashStorage for RocksStorage {
     }
 
     async fn save_reorg(&self, event: ReorgEvent) -> Result<()> {
-        let key = format!("reorg:{}:{}", event.block_number, event.detected_at.timestamp_nanos());
+        let desc_ts = u64::MAX - event.detected_at.timestamp_nanos() as u64;
+        let key = format!("reorg:{:020}:{}", desc_ts, event.block_number);
         let val = serde_json.to_vec(&event)?;
         self.db.put(key, val)?;
         Ok(())
     }
 
-    async fn get_latest_reorgs(&self, _limit: usize) -> Result<Vec<ReorgEvent>> {
-        // Implementation for prefix iteration in RocksDB
-        // For brevity, returning empty for now
-        Ok(vec![])
+    async fn get_latest_reorgs(&self, limit: usize) -> Result<Vec<ReorgEvent>> {
+        use rocksdb::IteratorMode;
+        
+        let mut results = Vec::new();
+        let prefix = "reorg:";
+        let iter = self.db.iterator(IteratorMode::From(prefix.as_bytes(), rocksdb::Direction::Forward));
+
+        for item in iter {
+            let (key, value) = item?;
+            if !key.starts_with(prefix.as_bytes()) {
+                break;
+            }
+            let event: ReorgEvent = serde_json::from_slice(&value)?;
+            results.push(event);
+            if results.len() >= limit {
+                break;
+            }
+        }
+        Ok(results)
+    }
+
+    async fn get_equivocations(&self, limit: usize) -> Result<Vec<ReorgEvent>> {
+        use rocksdb::IteratorMode;
+        use flashstat_common::ReorgSeverity;
+        
+        let mut results = Vec::new();
+        let prefix = "reorg:";
+        let iter = self.db.iterator(IteratorMode::From(prefix.as_bytes(), rocksdb::Direction::Forward));
+
+        for item in iter {
+            let (key, value) = item?;
+            if !key.starts_with(prefix.as_bytes()) {
+                break;
+            }
+            let event: ReorgEvent = serde_json::from_slice(&value)?;
+            if event.severity == ReorgSeverity::Equivocation {
+                results.push(event);
+            }
+            if results.len() >= limit {
+                break;
+            }
+        }
+        Ok(results)
     }
 }

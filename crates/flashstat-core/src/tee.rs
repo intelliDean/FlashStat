@@ -11,21 +11,19 @@ impl TeeVerifier {
         Self { expected_sequencer }
     }
 
-    /// Verifies the sequencer signature against the block hash.
-    /// The signature should recover to the expected sequencer address.
-    pub fn verify_sequencer_signature(&self, block_hash: H256, signature_bytes: &[u8]) -> Result<bool> {
+    /// Recovers the signer's address from the signature and block hash.
+    pub fn recover_signer(&self, block_hash: H256, signature_bytes: &[u8]) -> Result<Address> {
         if signature_bytes.len() != 65 {
             return Err(eyre!("Invalid signature length: expected 65 bytes, got {}", signature_bytes.len()));
         }
-
-        // Parse signature from bytes
         let signature = Signature::try_from(signature_bytes)?;
-        
-        // Recover the address from the block hash
-        // We use the raw block hash without Ethereum signed message prefix
-        // since this is a protocol-level signature from the sequencer.
         let recovered_address = signature.recover(block_hash)?;
+        Ok(recovered_address)
+    }
 
+    /// Verifies the sequencer signature against the block hash.
+    pub fn verify_sequencer_signature(&self, block_hash: H256, signature_bytes: &[u8]) -> Result<bool> {
+        let recovered_address = self.recover_signer(block_hash, signature_bytes)?;
         let is_valid = recovered_address == self.expected_sequencer;
         
         debug!(

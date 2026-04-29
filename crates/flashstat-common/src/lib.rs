@@ -10,6 +10,7 @@ pub struct FlashBlock {
     pub parent_hash: H256,
     pub timestamp: DateTime<Utc>,
     pub sequencer_signature: Option<Bytes>,
+    pub signer: Option<Address>,
     pub confidence: f64,
     pub status: BlockStatus,
 }
@@ -29,12 +30,21 @@ pub struct ReorgEvent {
     pub new_hash: H256,
     pub detected_at: DateTime<Utc>,
     pub severity: ReorgSeverity,
+    pub equivocation: Option<EquivocationEvent>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EquivocationEvent {
+    pub signer: Address,
+    pub signature_1: Bytes,
+    pub signature_2: Bytes,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ReorgSeverity {
     Soft,
     Deep,
+    Equivocation,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -46,7 +56,7 @@ pub struct Config {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct TeeConfig {
-    pub sequencer_address: String,
+    pub sequencer_address: Address,
 }
 
 #[derive(Debug, Deserialize, Clone)]

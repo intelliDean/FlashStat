@@ -15,4 +15,7 @@ pub trait FlashApi {
 
     #[method(name = "getRecentReorgs")]
     async fn get_recent_reorgs(&self, limit: usize) -> RpcResult<Vec<ReorgEvent>>;
+
+    #[method(name = "getEquivocations")]
+    async fn get_equivocations(&self, limit: usize) -> RpcResult<Vec<ReorgEvent>>;
 }
