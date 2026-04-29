@@ -1,33 +1,35 @@
-use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
-use eyre::Result;
 use flashstat_api::FlashApiClient;
-use flashstat_common::{FlashBlock, ReorgEvent, SystemHealth};
-use jsonrpsee::http_client::HttpClientBuilder;
+use flashstat_common::FlashBlock;
+use flashstat_common::{HealthStatus, ReorgEvent, SequencerStats};
+use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
 use ratatui::{
     backend::CrosstermBackend,
+    execute,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
-    Frame, Terminal,
+    widgets::{Block as WidgetBlock, Borders, Cell, Paragraph, Row, Table},
+    Terminal,
 };
 use std::{
     io,
     time::{Duration, Instant},
 };
 
+use crossterm::{
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use eyre::Result;
+
 struct App {
     blocks: Vec<FlashBlock>,
     reorgs: Vec<ReorgEvent>,
-    health: Option<SystemHealth>,
-    latest_confidence: f64,
+    sequencers: Vec<SequencerStats>,
+    health: Option<HealthStatus>,
     last_tick: Instant,
     selected_reorg: usize,
-    sequencers: Vec<flashstat_common::SequencerStats>,
+    latest_block: u64,
+    latest_confidence: f64,
 }
 
 impl App {
@@ -35,25 +37,26 @@ impl App {
         App {
             blocks: Vec::new(),
             reorgs: Vec::new(),
+            sequencers: Vec::new(),
             health: None,
-            latest_confidence: 0.0,
             last_tick: Instant::now(),
             selected_reorg: 0,
-            sequencers: Vec::new(),
+            latest_block: 0,
+            latest_confidence: 0.0,
         }
     }
 
-    async fn init(&mut self, client: &(impl FlashApiClient + Sync)) -> Result<()> {
-        if let Ok(blocks) = client.get_recent_blocks(50).await {
-            self.blocks = blocks;
-            if let Some(first) = self.blocks.first() {
-                self.latest_confidence = first.confidence;
-            }
+    async fn init(&mut self, client: &HttpClient) -> Result<()> {
+        if let Ok(Some(block)) = client.get_latest_block().await {
+            self.latest_block = block.number;
+            self.latest_confidence = block.confidence;
+            self.blocks.push(block);
         }
         if let Ok(recent_reorgs) = client.get_recent_reorgs(10).await {
             self.reorgs = recent_reorgs;
         }
-        if let Ok(sequencers) = client.get_sequencer_rankings().await {
+        if let Ok(mut sequencers) = client.get_sequencer_rankings().await {
+            sequencers.sort_by_key(|s| std::cmp::Reverse(s.reputation_score));
             self.sequencers = sequencers;
         }
         Ok(())
@@ -78,7 +81,8 @@ impl App {
             self.health = Some(health);
         }
 
-        if let Ok(sequencers) = client.get_sequencer_rankings().await {
+        if let Ok(mut sequencers) = client.get_sequencer_rankings().await {
+            sequencers.sort_by_key(|s| std::cmp::Reverse(s.reputation_score));
             self.sequencers = sequencers;
         }
 
@@ -107,11 +111,14 @@ async fn main() -> Result<()> {
             .checked_sub(app.last_tick.elapsed())
             .unwrap_or_default();
 
+        #[allow(clippy::collapsible_if)]
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
                 match key.code {
                     KeyCode::Char('q') => break,
-                    KeyCode::Down if !app.reorgs.is_empty() && app.selected_reorg < app.reorgs.len() - 1 => {
+                    KeyCode::Down
+                        if !app.reorgs.is_empty() && app.selected_reorg < app.reorgs.len() - 1 =>
+                    {
                         app.selected_reorg += 1;
                     }
                     KeyCode::Up if app.selected_reorg > 0 => {
@@ -139,178 +146,147 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn ui(f: &mut Frame, app: &App) {
+fn ui(f: &mut ratatui::Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
+        .margin(1)
         .constraints(
             [
                 Constraint::Length(3),
-                Constraint::Min(0),
+                Constraint::Min(10),
                 Constraint::Length(10),
-                Constraint::Length(3),
             ]
             .as_ref(),
         )
         .split(f.size());
 
-    // Title / Confidence Gauge
-    let status_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)].as_ref())
-        .split(chunks[0]);
-
-    let title = Paragraph::new(format!(
-        " 🏮 FlashStat Dashboard | Confidence: {:.2}%",
-        app.latest_confidence
-    ))
-    .block(Block::default().borders(Borders::ALL).title("Status"));
-    f.render_widget(title, status_chunks[0]);
-
-    let stats_text = if let Some(h) = &app.health {
-        format!(" Uptime: {}s | Blocks: {} | Alerts: {} ", h.uptime_secs, h.total_blocks, h.total_reorgs)
-    } else {
-        " Connecting... ".to_string()
+    // 1. Header with Health
+    let health_text = match &app.health {
+        Some(h) => format!(
+            "Status: {} | DB Size: {:.2} MB | Total Reorgs: {}",
+            h.status,
+            h.db_size_bytes as f64 / 1_048_576.0,
+            h.total_reorgs
+        ),
+        None => "Connecting to FlashStat Server...".to_string(),
     };
-    let stats = Paragraph::new(stats_text)
-        .block(Block::default().borders(Borders::ALL).title("System Stats"));
-    f.render_widget(stats, status_chunks[1]);
 
-    let main_chunks = Layout::default()
+    let header = Paragraph::new(health_text)
+        .style(Style::default().fg(Color::Cyan))
+        .block(
+            WidgetBlock::default()
+                .borders(Borders::ALL)
+                .title(" 🏮 FlashStat Dashboard "),
+        );
+    f.render_widget(header, chunks[0]);
+
+    // 2. Main Content (Blocks and Rankings)
+    let body_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(30), Constraint::Percentage(30)].as_ref())
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)].as_ref())
         .split(chunks[1]);
 
-    // Block Feed
-    let blocks: Vec<ListItem> = app
+    // Blocks Table
+    let rows: Vec<Row> = app
         .blocks
         .iter()
         .map(|b| {
-            let content = vec![Line::from(vec![
-                Span::styled(
-                    format!("#{:<10}", b.number),
-                    Style::default().fg(Color::Cyan),
-                ),
-                Span::raw(" | "),
-                Span::styled(
-                    format!("{:.2}%", b.confidence),
-                    Style::default().fg(Color::Yellow),
-                ),
-                Span::raw(" | "),
-                Span::raw(format!("{}", b.hash)),
-            ])];
-            ListItem::new(content)
+            let style = if b.confidence > 95.0 {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::Yellow)
+            };
+            Row::new(vec![
+                Cell::from(b.number.to_string()),
+                Cell::from(format!("{:.2}%", b.confidence)),
+                Cell::from(format!("0x{}...", &b.hash.to_string()[2..10])),
+            ])
+            .style(style)
         })
         .collect();
 
-    let block_list = List::new(blocks).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("Live Block Feed"),
-    );
-    f.render_widget(block_list, main_chunks[0]);
+    let blocks_table = Table::new(
+        rows,
+        [
+            Constraint::Percentage(20),
+            Constraint::Percentage(30),
+            Constraint::Percentage(50),
+        ],
+    )
+    .header(
+        Row::new(vec!["Block", "Confidence", "Hash"])
+            .style(Style::default().fg(Color::Gray))
+            .bottom_margin(1),
+    )
+    .block(WidgetBlock::default().borders(Borders::ALL).title(" Recent Blocks "));
+    f.render_widget(blocks_table, body_chunks[0]);
 
-    // Sequencer Reputation
-    let sequencers: Vec<ListItem> = app
+    // Rankings Table
+    let ranking_rows: Vec<Row> = app
         .sequencers
         .iter()
         .map(|s| {
-            let score_color = if s.reputation_score >= 0 { Color::Green } else { Color::Red };
-            let content = vec![Line::from(vec![
-                Span::styled(format!("{:.4}… ", s.address), Style::default().fg(Color::Gray)),
-                Span::styled(format!("Score: {:<5}", s.reputation_score), Style::default().fg(score_color)),
-            ])];
-            ListItem::new(content)
+            Row::new(vec![
+                Cell::from(format!("0x{}...", &s.address.to_string()[2..8])),
+                Cell::from(s.reputation_score.to_string()),
+                Cell::from(s.total_attested_blocks.to_string()),
+            ])
         })
         .collect();
-    
-    let sequencer_list = List::new(sequencers).block(
-        Block::default().borders(Borders::ALL).title("Sequencer Reputation")
-    );
-    f.render_widget(sequencer_list, main_chunks[1]);
 
-    // Reorg Log
-    let reorgs: Vec<ListItem> = app
+    let rankings_table = Table::new(
+        ranking_rows,
+        [
+            Constraint::Percentage(40),
+            Constraint::Percentage(30),
+            Constraint::Percentage(30),
+        ],
+    )
+    .header(
+        Row::new(vec!["Sequencer", "Score", "TEE Docs"])
+            .style(Style::default().fg(Color::Gray))
+            .bottom_margin(1),
+    )
+    .block(WidgetBlock::default().borders(Borders::ALL).title(" Reputation Ranking "));
+    f.render_widget(rankings_table, body_chunks[1]);
+
+    // 3. Reorgs/Equivocations
+    let reorg_rows: Vec<Row> = app
         .reorgs
         .iter()
-        .map(|r| {
-            let severity_style = match r.severity {
-                flashstat_common::ReorgSeverity::Soft => Style::default().fg(Color::Yellow),
-                flashstat_common::ReorgSeverity::Deep => {
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-                }
-                flashstat_common::ReorgSeverity::Equivocation => Style::default()
-                    .fg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
+        .enumerate()
+        .map(|(i, r)| {
+            let style = if i == app.selected_reorg {
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::LightRed)
             };
-
-            let content = vec![Line::from(vec![
-                Span::styled(format!("{:?}", r.severity), severity_style),
-                Span::raw(format!(" at #{}", r.block_number)),
-            ])];
-            ListItem::new(content)
+            Row::new(vec![
+                Cell::from(r.block_number.to_string()),
+                Cell::from(format!("{:?}", r.severity)),
+                Cell::from(r.detected_at.format("%H:%M:%S").to_string()),
+            ])
+            .style(style)
         })
         .collect();
 
-    let reorg_list = List::new(reorgs)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Security Alerts"),
-        )
-        .highlight_style(Style::default().add_modifier(Modifier::BOLD).bg(Color::DarkGray))
-        .highlight_symbol(">> ");
-    
-    f.render_widget(reorg_list, main_chunks[2]);
-
-    // Analysis Details
-    let details_content = if let Some(reorg) = app.reorgs.get(app.selected_reorg) {
-        let mut lines = vec![
-            Line::from(vec![
-                Span::styled("Event: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(format!("{:?} at block #{}", reorg.severity, reorg.block_number)),
-                Span::raw(" | "),
-                Span::styled("Detected: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(format!("{}", reorg.detected_at.format("%H:%M:%S"))),
-            ]),
-        ];
-
-        if let Some(eq) = &reorg.equivocation {
-            lines.push(Line::from(vec![
-                Span::styled("Conflict Analysis:", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-            ]));
-            
-            if let Some(analysis) = &eq.conflict_analysis {
-                lines.push(Line::from(format!("  Dropped Transactions: {}", analysis.dropped_txs.len())));
-                lines.push(Line::from(format!("  Double Spend Attempts: {}", analysis.double_spend_txs.len())));
-                
-                for ds in &analysis.double_spend_txs {
-                    lines.push(Line::from(vec![
-                        Span::styled("  ⚠️ Double Spend: ", Style::default().fg(Color::Red)),
-                        Span::raw(format!("Sender {} | Nonce {}", ds.sender, ds.nonce)),
-                    ]));
-                    lines.push(Line::from(format!("    TX 1: {}", ds.tx_hash_1)));
-                    lines.push(Line::from(format!("    TX 2: {}", ds.tx_hash_2)));
-                }
-            } else {
-                lines.push(Line::from("  (Analysis Pending...)"));
-            }
-        } else {
-            lines.push(Line::from("  No double-spend data available for this event type."));
-        }
-        lines
-    } else {
-        vec![Line::from("Select a security event with Up/Down arrows for details.")]
-    };
-
-    let details = Paragraph::new(details_content).block(
-        Block::default()
+    let reorgs_table = Table::new(
+        reorg_rows,
+        [
+            Constraint::Percentage(30),
+            Constraint::Percentage(40),
+            Constraint::Percentage(30),
+        ],
+    )
+    .header(
+        Row::new(vec!["Block", "Type", "Detected At"])
+            .style(Style::default().fg(Color::Gray))
+            .bottom_margin(1),
+    )
+    .block(
+        WidgetBlock::default()
             .borders(Borders::ALL)
-            .title("Analysis Forensics (Selected Event)"),
+            .title(" 🚨 Security Alerts (Equivocations) "),
     );
-    f.render_widget(details, chunks[2]);
-
-    // Controls
-    let help = Paragraph::new(" [q] Quit | [↑/↓] Select Alert | [r] Refresh Proofs ")
-        .block(Block::default().borders(Borders::ALL).title("Controls"));
-    f.render_widget(help, chunks[3]);
+    f.render_widget(reorgs_table, chunks[2]);
 }

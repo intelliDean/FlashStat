@@ -8,7 +8,7 @@ pub mod wallet;
 use chrono::Utc;
 use ethers::prelude::*;
 use eyre::Result;
-use flashstat_db::{FlashStorage, RedbStorage};
+use flashstat_db::FlashStorage;
 use futures_util::StreamExt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -131,6 +131,7 @@ impl FlashMonitor {
                         Ok(num) => {
                             let num_u64 = num.as_u64();
                             if num_u64 > last_polled_block {
+                                #[allow(clippy::collapsible_if)]
                                 if let Ok(Some(block)) = self.provider.get_block(num).await {
                                     if let Err(e) = self.handle_new_block(block).await {
                                         error!("Error processing polled block: {:?}", e);
@@ -176,20 +177,28 @@ impl FlashMonitor {
                             number
                         );
 
-                        // Phase 5: Optional TDX Attestation Check
                         if self.config.tee.attestation_enabled {
-                            let quote = extract_quote_from_block(&eth_block);
-                            if let Ok(valid) = self.tee_verifier.verify_tdx_attestation(
-                                &quote.unwrap_or_default(),
-                                self.config.tee.expected_mrenclave.as_deref(),
-                            ) {
-                                if valid {
-                                    confidence = 99.0;
-                                    info!("🛡️ TDX Attestation Verified for block #{}", number);
-                                } else {
-                                    confidence = 45.0;
-                                    warn!("⚠️ TEE Signature valid but Attestation FAILED for block #{}", number);
+                            if let Some(quote) = extract_quote_from_block(&eth_block) {
+                                match self.tee_verifier.verify_tdx_attestation(
+                                    &quote,
+                                    self.config.tee.expected_mrenclave.as_deref(),
+                                ) {
+                                    Ok(true) => {
+                                        confidence = 99.0;
+                                        info!("🛡️ TDX Attestation Verified for block #{}", number);
+                                    }
+                                    Ok(false) => {
+                                        confidence = 45.0;
+                                        warn!("⚠️ TEE Signature valid but Attestation Check FAILED for block #{}", number);
+                                    }
+                                    Err(e) => {
+                                        confidence = 70.0;
+                                        warn!("⚠️ TEE Signature valid but Attestation verification ERROR for block #{}: {:?}", number, e);
+                                    }
                                 }
+                            } else {
+                                confidence = 85.0;
+                                warn!("⚠️ Attestation enabled but NO quote found in block #{}", number);
                             }
                         }
                     } else {
@@ -216,12 +225,16 @@ impl FlashMonitor {
                     let mut equivocation = None;
 
                     // Detect Equivocation: Same block number, different hash, same signer
-                    if let (Some(sig1), Some(sig2), Some(signer1), Some(signer2)) = (
+                    let equivocation_check = (
                         &prev.sequencer_signature,
                         &sequencer_signature,
                         &prev.signer,
                         &signer,
-                    ) {
+                    );
+                    if let (Some(sig1), Some(sig2), Some(signer1), Some(signer2)) =
+                        equivocation_check
+                    {
+                        #[allow(clippy::collapsible_if)]
                         if signer1 == signer2 {
                             severity = ReorgSeverity::Equivocation;
                             equivocation = Some(EquivocationEvent {
@@ -286,9 +299,7 @@ impl FlashMonitor {
                                         "🚀 ACTIVE PROTECTION: Slashing proof submitted! TX: {:?}",
                                         tx_hash
                                     ),
-                                    Err(e) => {
-                                        error!("❌ Watchtower FAILED to submit proof: {:?}", e)
-                                    }
+                                    Err(e) => error!("❌ Watchtower FAILED to submit proof: {:?}", e),
                                 }
                             }
                         });
@@ -358,10 +369,7 @@ impl FlashMonitor {
         // Update Reputation
         if let Some(signer_addr) = signer {
             let attested = confidence > 95.0; // Phase 5 threshold
-            if let Err(e) = self
-                .update_reputation(signer_addr, 1, 0, 0, attested)
-                .await
-            {
+            if let Err(e) = self.update_reputation(signer_addr, 1, 0, 0, attested).await {
                 error!("Failed to update reputation: {:?}", e);
             }
         }
@@ -406,8 +414,8 @@ impl FlashMonitor {
         stats.last_active = Utc::now();
 
         // Calculate score with Refined Weights
-        let base_score = (stats.total_blocks_signed as i64) * 1;
-        let attestation_bonus = (stats.total_attested_blocks as i64) * 1; // Permanent +1 for each hardware-backed block
+        let base_score = stats.total_blocks_signed as i64;
+        let attestation_bonus = stats.total_attested_blocks as i64; // Permanent +1 for each hardware-backed block
         let streak_bonus = (stats.current_streak / 100) as i64 * 10;
 
         let penalty =
@@ -434,9 +442,30 @@ fn extract_signature_from_block(block: &Block<H256>) -> Option<Bytes> {
 }
 
 /// Helper to extract the TEE attestation quote from a block.
-fn extract_quote_from_block(_block: &Block<H256>) -> Option<Bytes> {
-    // TODO: Implement actual extraction logic for Unichain (e.g. from RLP-encoded extra data)
-    None
+/// In Unichain, the quote may be present in extra_data or a custom header.
+fn extract_quote_from_block(block: &Block<H256>) -> Option<Bytes> {
+    let extra_data = &block.extra_data;
+
+    // OP-Stack extra_data structure: [32-byte zero prefix] [65-byte signature] [optional quote]
+    // If the data is longer than 32 + 65, the remainder might be the quote.
+    if extra_data.len() > 97 {
+        let quote = &extra_data[97..];
+        Some(Bytes::from(quote.to_vec()))
+    } else {
+        // Fallback: check if the extra_data itself is an RLP list containing the quote
+        let rlp = ethers::utils::rlp::Rlp::new(extra_data);
+        if rlp.is_list() && rlp.item_count().unwrap_or(0) >= 2 {
+            if let Some(quote_bytes) = rlp
+                .at(1)
+                .ok()
+                .and_then(|item| item.as_val::<Vec<u8>>().ok())
+                .filter(|b| b.len() > 128)
+            {
+                return Some(Bytes::from(quote_bytes));
+            }
+        }
+        None
+    }
 }
 
 async fn analyze_and_update_equivocation(

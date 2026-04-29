@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 flashstat-core = { path = "../../crates/flashstat-core" }
 flashstat-common = { path = "../../crates/flashstat-common" }
+flashstat-db = { path = "../../crates/flashstat-db" }
 tokio = { workspace = true }
 eyre = { workspace = true }
 tracing = { workspace = true }
