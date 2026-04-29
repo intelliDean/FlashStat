@@ -27,6 +27,7 @@ struct App {
     latest_confidence: f64,
     last_tick: Instant,
     selected_reorg: usize,
+    sequencers: Vec<flashstat_common::SequencerStats>,
 }
 
 impl App {
@@ -38,6 +39,7 @@ impl App {
             latest_confidence: 0.0,
             last_tick: Instant::now(),
             selected_reorg: 0,
+            sequencers: Vec::new(),
         }
     }
 
@@ -50,6 +52,9 @@ impl App {
         }
         if let Ok(recent_reorgs) = client.get_recent_reorgs(10).await {
             self.reorgs = recent_reorgs;
+        }
+        if let Ok(sequencers) = client.get_sequencer_rankings().await {
+            self.sequencers = sequencers;
         }
         Ok(())
     }
@@ -71,6 +76,10 @@ impl App {
 
         if let Ok(health) = client.get_health().await {
             self.health = Some(health);
+        }
+
+        if let Ok(sequencers) = client.get_sequencer_rankings().await {
+            self.sequencers = sequencers;
         }
 
         Ok(())
@@ -168,7 +177,7 @@ fn ui(f: &mut Frame, app: &App) {
 
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)].as_ref())
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(30), Constraint::Percentage(30)].as_ref())
         .split(chunks[1]);
 
     // Block Feed
@@ -199,6 +208,25 @@ fn ui(f: &mut Frame, app: &App) {
             .title("Live Block Feed"),
     );
     f.render_widget(block_list, main_chunks[0]);
+
+    // Sequencer Reputation
+    let sequencers: Vec<ListItem> = app
+        .sequencers
+        .iter()
+        .map(|s| {
+            let score_color = if s.reputation_score >= 0 { Color::Green } else { Color::Red };
+            let content = vec![Line::from(vec![
+                Span::styled(format!("{:.4}… ", s.address), Style::default().fg(Color::Gray)),
+                Span::styled(format!("Score: {:<5}", s.reputation_score), Style::default().fg(score_color)),
+            ])];
+            ListItem::new(content)
+        })
+        .collect();
+    
+    let sequencer_list = List::new(sequencers).block(
+        Block::default().borders(Borders::ALL).title("Sequencer Reputation")
+    );
+    f.render_widget(sequencer_list, main_chunks[1]);
 
     // Reorg Log
     let reorgs: Vec<ListItem> = app
@@ -232,7 +260,7 @@ fn ui(f: &mut Frame, app: &App) {
         .highlight_style(Style::default().add_modifier(Modifier::BOLD).bg(Color::DarkGray))
         .highlight_symbol(">> ");
     
-    f.render_widget(reorg_list, main_chunks[1]);
+    f.render_widget(reorg_list, main_chunks[2]);
 
     // Analysis Details
     let details_content = if let Some(reorg) = app.reorgs.get(app.selected_reorg) {

@@ -9,6 +9,7 @@ const BLOCKS_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("blocks
 const REORGS_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("reorgs");
 const META_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("meta");
 const BLOCK_NUMBERS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("block_numbers");
+const SEQUENCERS_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("sequencer_stats");
 const LATEST_BLOCK_KEY: &str = "latest_block_hash";
 
 #[async_trait]
@@ -20,6 +21,9 @@ pub trait FlashStorage: Send + Sync {
     async fn get_equivocations(&self, limit: usize) -> Result<Vec<ReorgEvent>>;
     async fn get_latest_block(&self) -> Result<Option<FlashBlock>>;
     async fn get_recent_blocks(&self, limit: usize) -> Result<Vec<FlashBlock>>;
+    async fn update_sequencer_stats(&self, stats: flashstat_common::SequencerStats) -> Result<()>;
+    async fn get_sequencer_stats(&self, address: ethers::types::Address) -> Result<Option<flashstat_common::SequencerStats>>;
+    async fn get_all_sequencer_stats(&self) -> Result<Vec<flashstat_common::SequencerStats>>;
 }
 
 pub struct RedbStorage {
@@ -40,6 +44,7 @@ impl RedbStorage {
             let _ = write_txn.open_table(REORGS_TABLE)?;
             let _ = write_txn.open_table(META_TABLE)?;
             let _ = write_txn.open_table(BLOCK_NUMBERS_TABLE)?;
+            let _ = write_txn.open_table(SEQUENCERS_TABLE)?;
         }
         write_txn.commit()?;
 
@@ -167,6 +172,43 @@ impl FlashStorage for RedbStorage {
             if results.len() >= limit {
                 break;
             }
+        }
+        Ok(results)
+    }
+
+    async fn update_sequencer_stats(&self, stats: flashstat_common::SequencerStats) -> Result<()> {
+        let key = stats.address.as_bytes();
+        let val = serde_json::to_vec(&stats)?;
+
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(SEQUENCERS_TABLE)?;
+            table.insert(key, val.as_slice())?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    async fn get_sequencer_stats(&self, address: ethers::types::Address) -> Result<Option<flashstat_common::SequencerStats>> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(SEQUENCERS_TABLE)?;
+        let val = table.get(address.as_bytes())?;
+
+        if let Some(bytes) = val {
+            Ok(Some(serde_json::from_slice(bytes.value())?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn get_all_sequencer_stats(&self) -> Result<Vec<flashstat_common::SequencerStats>> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(SEQUENCERS_TABLE)?;
+
+        let mut results = Vec::new();
+        for item in table.iter()? {
+            let (_key, value) = item?;
+            results.push(serde_json::from_slice(value.value())?);
         }
         Ok(results)
     }

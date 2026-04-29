@@ -76,6 +76,17 @@ impl FlashApiServer for FlashServer {
         })
     }
 
+    async fn get_sequencer_rankings(&self) -> RpcResult<Vec<flashstat_common::SequencerStats>> {
+        let mut stats = self.storage
+            .get_all_sequencer_stats()
+            .await
+            .map_err(|e| ErrorObjectOwned::owned(-32603, e.to_string(), None::<()>))?;
+        
+        // Sort by score descending
+        stats.sort_by(|a, b| b.reputation_score.cmp(&a.reputation_score));
+        Ok(stats)
+    }
+
     async fn subscribe_blocks(
         &self,
         pending: jsonrpsee::PendingSubscriptionSink,

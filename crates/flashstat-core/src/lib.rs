@@ -250,7 +250,15 @@ impl FlashMonitor {
                     }
 
                     self.storage.save_reorg(event.clone()).await?;
-                    let _ = self.event_tx.send(event);
+                    let _ = self.event_tx.send(event.clone());
+
+                    // Update Reputation Penalties
+                    if let Some(signer_addr) = signer {
+                        let (soft, equiv) = if severity == ReorgSeverity::Equivocation { (0, 1) } else { (1, 0) };
+                        if let Err(e) = self.update_reputation(signer_addr, 0, soft, equiv).await {
+                            error!("Failed to apply reputation penalty: {:?}", e);
+                        }
+                    }
                 }
             } else if prev.number < number {
                 // Approximate persistence from previous confidence
@@ -294,8 +302,36 @@ impl FlashMonitor {
 
         self.storage.save_block(flash_block.clone()).await?;
         let _ = self.block_tx.send(flash_block.clone());
+        
+        // Update Reputation
+        if let Some(signer_addr) = signer {
+            if let Err(e) = self.update_reputation(signer_addr, 1, 0, 0).await {
+                error!("Failed to update reputation: {:?}", e);
+            }
+        }
+
         *last_block_guard = Some(flash_block);
 
+        Ok(())
+    }
+
+    async fn update_reputation(&self, address: Address, blocks: u64, soft_reorgs: u64, equivocations: u64) -> Result<()> {
+        let mut stats = self.storage.get_sequencer_stats(address).await?.unwrap_or(flashstat_common::SequencerStats {
+            address,
+            last_active: Utc::now(),
+            ..Default::default()
+        });
+
+        stats.total_blocks_signed += blocks;
+        stats.total_soft_reorgs += soft_reorgs;
+        stats.total_equivocations += equivocations;
+        stats.last_active = Utc::now();
+
+        // Calculate score
+        let penalty = (soft_reorgs as i64 * 50) + (equivocations as i64 * 500);
+        stats.reputation_score = (stats.total_blocks_signed as i64) - (stats.total_soft_reorgs as i64 * 50) - (stats.total_equivocations as i64 * 500);
+
+        self.storage.update_sequencer_stats(stats).await?;
         Ok(())
     }
 }

@@ -70,6 +70,16 @@ pub struct SystemHealth {
     pub db_size_bytes: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SequencerStats {
+    pub address: Address,
+    pub total_blocks_signed: u64,
+    pub total_soft_reorgs: u64,
+    pub total_equivocations: u64,
+    pub reputation_score: i64,
+    pub last_active: DateTime<Utc>,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub rpc: RpcConfig,
