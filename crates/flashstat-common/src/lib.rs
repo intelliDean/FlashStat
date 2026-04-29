@@ -70,11 +70,31 @@ pub struct SystemHealth {
     pub db_size_bytes: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SequencerStats {
+    pub address: Address,
+    pub total_blocks_signed: u64,
+    pub total_attested_blocks: u64,
+    pub total_soft_reorgs: u64,
+    pub total_equivocations: u64,
+    pub current_streak: u64,
+    pub reputation_score: i64,
+    pub last_active: DateTime<Utc>,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub rpc: RpcConfig,
     pub storage: StorageConfig,
     pub tee: TeeConfig,
+    pub guardian: GuardianConfig,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct GuardianConfig {
+    pub private_key: Option<String>,
+    pub keystore_path: Option<String>,
+    pub slashing_contract: Address,
 }
 
 #[derive(Debug, Deserialize, Clone)]

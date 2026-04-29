@@ -76,6 +76,17 @@ impl FlashApiServer for FlashServer {
         })
     }
 
+    async fn get_sequencer_rankings(&self) -> RpcResult<Vec<flashstat_common::SequencerStats>> {
+        let mut stats = self.storage
+            .get_all_sequencer_stats()
+            .await
+            .map_err(|e| ErrorObjectOwned::owned(-32603, e.to_string(), None::<()>))?;
+        
+        // Sort by score descending
+        stats.sort_by(|a, b| b.reputation_score.cmp(&a.reputation_score));
+        Ok(stats)
+    }
+
     async fn subscribe_blocks(
         &self,
         pending: jsonrpsee::PendingSubscriptionSink,
@@ -130,10 +141,12 @@ async fn main() -> eyre::Result<()> {
     // 1. Initialize Shutdown Signal
     let (shutdown_tx, _) = broadcast::channel(1);
 
-    // 2. Initialize Monitor (which manages storage)
+    // 2. Initialize Storage
+    let storage = std::sync::Arc::new(flashstat_db::RedbStorage::new(&config.storage.db_path)?);
+
+    // 3. Initialize Monitor
     let mut monitor =
-        flashstat_core::FlashMonitor::new(config.clone(), shutdown_tx.subscribe()).await?;
-    let storage = monitor.storage();
+        flashstat_core::FlashMonitor::new(config.clone(), storage.clone(), shutdown_tx.subscribe()).await?;
     let block_tx = monitor.block_notifier();
     let event_tx = monitor.event_notifier();
 

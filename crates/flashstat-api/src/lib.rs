@@ -24,6 +24,9 @@ pub trait FlashApi {
     #[method(name = "getHealth")]
     async fn get_health(&self) -> RpcResult<flashstat_common::SystemHealth>;
 
+    #[method(name = "getSequencerRankings")]
+    async fn get_sequencer_rankings(&self) -> RpcResult<Vec<flashstat_common::SequencerStats>>;
+
     #[subscription(name = "subscribeBlocks", item = FlashBlock)]
     async fn subscribe_blocks(&self) -> jsonrpsee::core::SubscriptionResult;
 
