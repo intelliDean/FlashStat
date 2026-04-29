@@ -2,8 +2,8 @@ use flashstat_common::{
     BlockStatus, Config, ConflictAnalysis, DoubleSpendProof, EquivocationEvent, FlashBlock,
     ReorgEvent, ReorgSeverity,
 };
-pub mod tee;
 pub mod proof;
+pub mod tee;
 pub mod wallet;
 use chrono::Utc;
 use ethers::prelude::*;
@@ -13,7 +13,7 @@ use futures_util::StreamExt;
 use std::sync::Arc;
 use std::time::Duration;
 use tee::TeeVerifier;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{Mutex, broadcast};
 use tracing::{error, info, warn};
 
 pub struct FlashMonitor {
@@ -189,16 +189,25 @@ impl FlashMonitor {
                                     }
                                     Ok(false) => {
                                         confidence = 45.0;
-                                        warn!("⚠️ TEE Signature valid but Attestation Check FAILED for block #{}", number);
+                                        warn!(
+                                            "⚠️ TEE Signature valid but Attestation Check FAILED for block #{}",
+                                            number
+                                        );
                                     }
                                     Err(e) => {
                                         confidence = 70.0;
-                                        warn!("⚠️ TEE Signature valid but Attestation verification ERROR for block #{}: {:?}", number, e);
+                                        warn!(
+                                            "⚠️ TEE Signature valid but Attestation verification ERROR for block #{}: {:?}",
+                                            number, e
+                                        );
                                     }
                                 }
                             } else {
                                 confidence = 85.0;
-                                warn!("⚠️ Attestation enabled but NO quote found in block #{}", number);
+                                warn!(
+                                    "⚠️ Attestation enabled but NO quote found in block #{}",
+                                    number
+                                );
                             }
                         }
                     } else {
@@ -299,7 +308,9 @@ impl FlashMonitor {
                                         "🚀 ACTIVE PROTECTION: Slashing proof submitted! TX: {:?}",
                                         tx_hash
                                     ),
-                                    Err(e) => error!("❌ Watchtower FAILED to submit proof: {:?}", e),
+                                    Err(e) => {
+                                        error!("❌ Watchtower FAILED to submit proof: {:?}", e)
+                                    }
                                 }
                             }
                         });
@@ -387,15 +398,13 @@ impl FlashMonitor {
         equivocations: u64,
         attested: bool,
     ) -> Result<()> {
-        let mut stats = self
-            .storage
-            .get_sequencer_stats(address)
-            .await?
-            .unwrap_or(flashstat_common::SequencerStats {
+        let mut stats = self.storage.get_sequencer_stats(address).await?.unwrap_or(
+            flashstat_common::SequencerStats {
                 address,
                 last_active: Utc::now(),
                 ..Default::default()
-            });
+            },
+        );
 
         if blocks > 0 {
             stats.total_blocks_signed += blocks;
@@ -454,6 +463,7 @@ fn extract_quote_from_block(block: &Block<H256>) -> Option<Bytes> {
     } else {
         // Fallback: check if the extra_data itself is an RLP list containing the quote
         let rlp = ethers::utils::rlp::Rlp::new(extra_data);
+        #[allow(clippy::collapsible_if)]
         if rlp.is_list() && rlp.item_count().unwrap_or(0) >= 2 {
             if let Some(quote_bytes) = rlp
                 .at(1)
