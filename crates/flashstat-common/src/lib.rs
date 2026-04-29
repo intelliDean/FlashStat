@@ -86,6 +86,14 @@ pub struct Config {
     pub rpc: RpcConfig,
     pub storage: StorageConfig,
     pub tee: TeeConfig,
+    pub guardian: GuardianConfig,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct GuardianConfig {
+    pub private_key: Option<String>,
+    pub keystore_path: Option<String>,
+    pub slashing_contract: Address,
 }
 
 #[derive(Debug, Deserialize, Clone)]

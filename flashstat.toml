@@ -13,3 +13,10 @@ db_path = "./data/flashstat_db"
 sequencer_address = "0x0000000000000000000000000000000000000000"
 attestation_enabled = false
 expected_mrenclave = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[guardian]
+# Private key for the guardian wallet (use environment variables in production!)
+# FLASHSTAT__GUARDIAN__PRIVATE_KEY
+private_key = ""
+# Address of the Unichain SlashingManager contract
+slashing_contract = "0x0000000000000000000000000000000000000000"

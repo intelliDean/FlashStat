@@ -3,6 +3,8 @@ use flashstat_common::{
     ReorgEvent, ReorgSeverity,
 };
 pub mod tee;
+pub mod proof;
+pub mod wallet;
 use chrono::Utc;
 use ethers::prelude::*;
 use eyre::Result;
@@ -23,6 +25,7 @@ pub struct FlashMonitor {
     block_tx: broadcast::Sender<FlashBlock>,
     event_tx: broadcast::Sender<ReorgEvent>,
     provider: Arc<Provider<Http>>,
+    guardian_wallet: Option<Arc<wallet::GuardianWallet>>,
 }
 
 impl FlashMonitor {
@@ -37,6 +40,12 @@ impl FlashMonitor {
 
         let provider = Arc::new(Provider::<Http>::try_from(&config.rpc.http_url)?);
 
+        let guardian_wallet = if config.guardian.private_key.is_some() || config.guardian.keystore_path.is_some() {
+            Some(Arc::new(wallet::GuardianWallet::new(&config.guardian, &config.rpc.http_url).await?))
+        } else {
+            None
+        };
+
         Ok(Self {
             config,
             storage,
@@ -46,6 +55,7 @@ impl FlashMonitor {
             block_tx,
             event_tx,
             provider,
+            guardian_wallet,
         })
     }
 
@@ -239,12 +249,34 @@ impl FlashMonitor {
                         let storage = self.storage.clone();
                         let provider = self.provider.clone();
                         let event_clone = event.clone();
+                        let guardian = self.guardian_wallet.clone();
+                        let sig1 = prev.sequencer_signature.clone().unwrap_or_default();
+                        let sig2 = sequencer_signature.clone().unwrap_or_default();
+                        let signer_addr = signer.unwrap_or_default();
+                        
                         tokio::spawn(async move {
                             if let Err(e) =
                                 analyze_and_update_equivocation(storage, provider, event_clone)
                                     .await
                             {
                                 warn!("Failed to analyze conflicts: {:?}", e);
+                            }
+
+                            // Active Fraud Proof Submission
+                            if let Some(wallet) = guardian {
+                                info!("🗼 Watchtower: Generating on-chain equivocation proof...");
+                                let proof = proof::encode_equivocation_proof(
+                                    number,
+                                    signer_addr,
+                                    sig1,
+                                    sig2,
+                                    prev.hash,
+                                    hash,
+                                );
+                                match wallet.submit_equivocation_proof(proof).await {
+                                    Ok(tx_hash) => info!("🚀 ACTIVE PROTECTION: Slashing proof submitted! TX: {:?}", tx_hash),
+                                    Err(e) => error!("❌ Watchtower FAILED to submit proof: {:?}", e),
+                                }
                             }
                         });
                     }
