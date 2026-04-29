@@ -1,7 +1,7 @@
-use ethers::types::{H256, U256, Bytes, Address};
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 use config::{Config as ConfigLoader, ConfigError, File};
+use ethers::types::{Address, Bytes, H256, U256};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlashBlock {
@@ -60,6 +60,14 @@ pub enum ReorgSeverity {
     Soft,
     Deep,
     Equivocation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemHealth {
+    pub uptime_secs: u64,
+    pub total_blocks: u64,
+    pub total_reorgs: u64,
+    pub db_size_bytes: u64,
 }
 
 #[derive(Debug, Deserialize, Clone)]

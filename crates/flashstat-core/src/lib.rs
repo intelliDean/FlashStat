@@ -1,15 +1,18 @@
-use flashstat_common::{FlashBlock, BlockStatus, ReorgEvent, ReorgSeverity, Config};
+use flashstat_common::{
+    BlockStatus, Config, ConflictAnalysis, DoubleSpendProof, EquivocationEvent, FlashBlock,
+    ReorgEvent, ReorgSeverity,
+};
 pub mod tee;
-use tee::TeeVerifier;
-use flashstat_db::{FlashStorage, RocksStorage};
-use ethers::prelude::*;
-use eyre::{Result, Context};
-use std::sync::Arc;
-use tokio::sync::{Mutex, broadcast};
 use chrono::Utc;
-use tracing::{info, warn, error};
+use ethers::prelude::*;
+use eyre::Result;
+use flashstat_db::{FlashStorage, RedbStorage};
 use futures_util::StreamExt;
+use std::sync::Arc;
 use std::time::Duration;
+use tee::TeeVerifier;
+use tokio::sync::{broadcast, Mutex};
+use tracing::{error, info, warn};
 
 pub struct FlashMonitor {
     config: Config,
@@ -19,18 +22,20 @@ pub struct FlashMonitor {
     tee_verifier: TeeVerifier,
     block_tx: broadcast::Sender<FlashBlock>,
     event_tx: broadcast::Sender<ReorgEvent>,
+    provider: Arc<Provider<Http>>,
 }
 
 impl FlashMonitor {
     pub async fn new(config: Config, shutdown_rx: broadcast::Receiver<()>) -> Result<Self> {
-        let storage = Arc::new(RocksStorage::new(&config.storage.db_path)?);
-        
-        let sequencer_address: Address = config.tee.sequencer_address.parse()
-            .context("Invalid sequencer address in config")?;
+        let storage = Arc::new(RedbStorage::new(&config.storage.db_path)?);
+
+        let sequencer_address: Address = config.tee.sequencer_address;
         let tee_verifier = TeeVerifier::new(sequencer_address);
-        
+
         let (block_tx, _) = broadcast::channel(100);
         let (event_tx, _) = broadcast::channel(100);
+
+        let provider = Arc::new(Provider::<Http>::try_from(&config.rpc.http_url)?);
 
         Ok(Self {
             config,
@@ -40,6 +45,7 @@ impl FlashMonitor {
             tee_verifier,
             block_tx,
             event_tx,
+            provider,
         })
     }
 
@@ -57,10 +63,12 @@ impl FlashMonitor {
 
     pub async fn run(&mut self) -> Result<()> {
         info!("🏮 FlashStat Monitor starting with Supervisor pattern");
-        
+
+        let mut shutdown_rx = self.shutdown_rx.resubscribe();
+
         loop {
             tokio::select! {
-                _ = self.shutdown_rx.recv() => {
+                _ = shutdown_rx.recv() => {
                     info!("🛑 Monitor received shutdown signal");
                     break;
                 }
@@ -72,40 +80,71 @@ impl FlashMonitor {
                 }
             }
         }
-        
+
         info!("🏮 Monitor shutdown complete");
         Ok(())
     }
 
     async fn supervise_connection(&self) -> Result<()> {
-        info!("🔗 Connecting to Unichain WebSocket: {}", self.config.rpc.ws_url);
-        
-        let provider = Provider::<Ws>::connect(&self.config.rpc.ws_url).await
-            .context("Failed to connect to Unichain WebSocket")?;
-        
-        let mut stream = provider.subscribe_blocks().await?;
-        info!("✅ WebSocket subscription active");
+        info!(
+            "🔗 Attempting Unichain WebSocket connection: {}",
+            self.config.rpc.ws_url
+        );
 
-        while let Some(block) = stream.next().await {
-            if let Err(e) = self.handle_new_block(block).await {
-                error!("Error processing block: {:?}", e);
+        let ws_res = Provider::<Ws>::connect(&self.config.rpc.ws_url).await;
+
+        match ws_res {
+            Ok(ws_provider) => {
+                info!("✅ WebSocket subscription active");
+                let mut stream = ws_provider.subscribe_blocks().await?;
+                while let Some(block) = stream.next().await {
+                    if let Err(e) = self.handle_new_block(block).await {
+                        error!("Error processing block: {:?}", e);
+                    }
+                }
+                warn!("⚠️ WebSocket stream disconnected unexpectedly");
+            }
+            Err(e) => {
+                warn!(
+                    "❌ WebSocket connection failed: {:?}. Falling back to HTTP polling...",
+                    e
+                );
+                let mut last_polled_block = 0u64;
+
+                loop {
+                    match self.provider.get_block_number().await {
+                        Ok(num) => {
+                            let num_u64 = num.as_u64();
+                            if num_u64 > last_polled_block {
+                                if let Ok(Some(block)) = self.provider.get_block(num).await {
+                                    if let Err(e) = self.handle_new_block(block).await {
+                                        error!("Error processing polled block: {:?}", e);
+                                    }
+                                    last_polled_block = num_u64;
+                                }
+                            }
+                        }
+                        Err(e) => error!("HTTP polling error: {:?}", e),
+                    }
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
             }
         }
 
-        warn!("⚠️ WebSocket stream disconnected unexpectedly");
         Ok(())
     }
 
     async fn handle_new_block(&self, eth_block: Block<H256>) -> Result<()> {
         let hash = eth_block.hash.unwrap_or_default();
-        let number = eth_block.number.unwrap_or_default();
-        
+        let number: U256 = eth_block.number.unwrap_or_default().as_u64().into();
+
         let mut last_block_guard = self.last_block.lock().await;
-        
+
         let mut persistence = 1;
         let mut sequencer_signature = None;
         let mut signer = None;
         let mut tee_valid = false;
+        let mut confidence = 0.0;
 
         // 1. Recover TEE signature and signer identity
         if let Some(sig_bytes) = extract_signature_from_block(&eth_block) {
@@ -114,17 +153,20 @@ impl FlashMonitor {
                     signer = Some(recovered_signer);
                     tee_valid = recovered_signer == self.tee_verifier.expected_sequencer;
                     sequencer_signature = Some(sig_bytes);
-                    
+
                     if tee_valid {
                         confidence = 90.0;
-                        info!("🛡️ TEE Signature Verified for block #{} by expected sequencer", number);
+                        info!(
+                            "🛡️ TEE Signature Verified for block #{} by expected sequencer",
+                            number
+                        );
 
                         // Phase 5: Optional TDX Attestation Check
                         if self.config.tee.attestation_enabled {
                             let quote = extract_quote_from_block(&eth_block);
                             if let Ok(valid) = self.tee_verifier.verify_tdx_attestation(
                                 &quote.unwrap_or_default(),
-                                self.config.tee.expected_mrenclave.as_deref()
+                                self.config.tee.expected_mrenclave.as_deref(),
                             ) {
                                 if valid {
                                     confidence = 99.0;
@@ -136,11 +178,17 @@ impl FlashMonitor {
                             }
                         }
                     } else {
-                        warn!("⚠️ TEE Signature valid but from unexpected signer: {:?}", recovered_signer);
+                        warn!(
+                            "⚠️ TEE Signature valid but from unexpected signer: {:?}",
+                            recovered_signer
+                        );
                     }
                 }
                 Err(e) => {
-                    warn!("⚠️ Failed to recover signer from TEE signature for block #{}: {:?}", number, e);
+                    warn!(
+                        "⚠️ Failed to recover signer from TEE signature for block #{}: {:?}",
+                        number, e
+                    );
                 }
             }
         }
@@ -165,8 +213,12 @@ impl FlashMonitor {
                                 signer: *signer1,
                                 signature_1: sig1.clone(),
                                 signature_2: sig2.clone(),
+                                conflict_analysis: None,
                             });
-                            warn!("🚨 EQUIVOCATION DETECTED at block #{} by signer {:?}!", number, signer1);
+                            warn!(
+                                "🚨 EQUIVOCATION DETECTED at block #{} by signer {:?}!",
+                                number, signer1
+                            );
                         }
                     }
 
@@ -182,14 +234,16 @@ impl FlashMonitor {
                         severity,
                         equivocation,
                     };
-                    
-                    // 3. Optional: Analyze conflicts for Double-Spends
+
                     if severity == ReorgSeverity::Equivocation {
                         let storage = self.storage.clone();
                         let provider = self.provider.clone();
                         let event_clone = event.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = analyze_and_update_equivocation(storage, provider, event_clone).await {
+                            if let Err(e) =
+                                analyze_and_update_equivocation(storage, provider, event_clone)
+                                    .await
+                            {
                                 warn!("Failed to analyze conflicts: {:?}", e);
                             }
                         });
@@ -197,22 +251,27 @@ impl FlashMonitor {
 
                     self.storage.save_reorg(event.clone()).await?;
                     let _ = self.event_tx.send(event);
-                } else {
-                    // Approximate persistence from previous confidence
-                    persistence = ((prev.confidence / 100.0).log(0.5).abs().ceil() as u32).max(1) + 1;
                 }
+            } else if prev.number < number {
+                // Approximate persistence from previous confidence
+                persistence = ((prev.confidence / 100.0).log(0.5).abs().ceil() as u32).max(1) + 1;
             }
         }
 
-        // 3. Confidence Scoring
         let base_confidence = (1.0 - 0.5f64.powi(persistence as i32)) * 100.0;
-        let confidence = if tee_valid {
-            // TEE verification significantly accelerates "Soft Finality"
-            (base_confidence + 99.0) / 2.0 
+        let final_confidence = if tee_valid {
+            (base_confidence + 99.0) / 2.0
         } else {
             base_confidence
         };
-        
+
+        // Use the TEE-specific override if available, otherwise use final_confidence
+        let confidence = if confidence > 0.0 {
+            confidence
+        } else {
+            final_confidence
+        };
+
         let flash_block = FlashBlock {
             number,
             hash,
@@ -221,24 +280,37 @@ impl FlashMonitor {
             sequencer_signature,
             signer,
             confidence,
-            status: if confidence > 95.0 { BlockStatus::Stable } else { BlockStatus::Pending },
+            status: if confidence > 95.0 {
+                BlockStatus::Stable
+            } else {
+                BlockStatus::Pending
+            },
         };
 
-        info!("🏮 Block #{} | Confidence: {:.2}% | Hash: {}", number, confidence, hash);
-        
+        info!(
+            "🏮 Block #{} | Confidence: {:.2}% | Hash: {}",
+            number, confidence, hash
+        );
+
         self.storage.save_block(flash_block.clone()).await?;
         let _ = self.block_tx.send(flash_block.clone());
         *last_block_guard = Some(flash_block);
-        
+
         Ok(())
     }
 }
 
 /// Helper to simulate extracting the TEE signature from a block.
 /// In Unichain, this is typically found in the extra_data or a custom header.
-fn extract_signature_from_block(_block: &Block<H256>) -> Option<Bytes> {
-    // TODO: Implement actual extraction logic for Unichain
-    None
+fn extract_signature_from_block(block: &Block<H256>) -> Option<Bytes> {
+    let extra_data = &block.extra_data;
+    if extra_data.len() >= 65 {
+        // Unichain/OP-Stack sequencer signatures are typically the last 65 bytes of extra_data
+        let sig = &extra_data[extra_data.len() - 65..];
+        Some(Bytes::from(sig.to_vec()))
+    } else {
+        None
+    }
 }
 
 /// Helper to extract the TEE attestation quote from a block.
@@ -249,26 +321,28 @@ fn extract_quote_from_block(_block: &Block<H256>) -> Option<Bytes> {
 
 async fn analyze_and_update_equivocation(
     storage: Arc<dyn FlashStorage>,
-    provider: Arc<Provider<Ws>>,
+    provider: Arc<Provider<Http>>,
     mut event: ReorgEvent,
 ) -> Result<()> {
-    use flashstat_common::{ConflictAnalysis, DoubleSpendProof};
-    use std::collections::HashMap;
     use ethers::prelude::*;
+    use std::collections::HashMap;
 
-    let Some(mut equivocation) = event.equivocation.take() else { return Ok(()) };
+    let Some(mut equivocation) = event.equivocation.take() else {
+        return Ok(());
+    };
 
     // Fetch full blocks with transactions
     let (Some(old_block), Some(new_block)) = futures_util::try_join!(
         provider.get_block_with_txs(event.old_hash),
         provider.get_block_with_txs(event.new_hash)
-    )? else {
+    )?
+    else {
         return Ok(());
     };
 
     let mut dropped_txs = Vec::new();
     let mut double_spend_txs = Vec::new();
-    
+
     // Map new block transactions by sender:nonce for quick lookup
     let mut new_tx_map = HashMap::new();
     for tx in &new_block.transactions {
@@ -276,7 +350,11 @@ async fn analyze_and_update_equivocation(
     }
 
     for old_tx in &old_block.transactions {
-        if !new_block.transactions.iter().any(|tx| tx.hash == old_tx.hash) {
+        if !new_block
+            .transactions
+            .iter()
+            .any(|tx| tx.hash == old_tx.hash)
+        {
             // Transaction was dropped
             dropped_txs.push(old_tx.hash);
 
@@ -300,6 +378,6 @@ async fn analyze_and_update_equivocation(
 
     // Update the reorg event in storage
     storage.save_reorg(event).await?;
-    
+
     Ok(())
 }

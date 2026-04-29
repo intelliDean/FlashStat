@@ -4,6 +4,7 @@ members = [
     "bin/flashstat",
     "bin/flashstat-server",
     "bin/flashstat-tui",
+    "bin/flashstat-simulate",
     "crates/flashstat-core",
     "crates/flashstat-api",
     "crates/flashstat-db",
@@ -19,7 +20,8 @@ eyre = "0.6"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json"] }
 chrono = { version = "0.4", features = ["serde"] }
-rocksdb = "0.21"
+redb = "2.1"
+hex = "0.4"
 async-trait = "0.1"
 config = "0.13"
 toml = "0.7"

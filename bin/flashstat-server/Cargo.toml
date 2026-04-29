@@ -7,6 +7,7 @@ edition = "2021"
 flashstat-api = { path = "../../crates/flashstat-api" }
 flashstat-common = { path = "../../crates/flashstat-common" }
 flashstat-db = { path = "../../crates/flashstat-db" }
+flashstat-core = { path = "../../crates/flashstat-core" }
 jsonrpsee = { workspace = true }
 tokio = { workspace = true }
 ethers = { workspace = true }
