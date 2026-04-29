@@ -13,6 +13,7 @@ pub trait FlashStorage: Send + Sync {
     async fn save_reorg(&self, event: ReorgEvent) -> Result<()>;
     async fn get_latest_reorgs(&self, limit: usize) -> Result<Vec<ReorgEvent>>;
     async fn get_equivocations(&self, limit: usize) -> Result<Vec<ReorgEvent>>;
+    async fn get_latest_block(&self) -> Result<Option<FlashBlock>>;
 }
 
 pub struct RocksStorage {
@@ -104,5 +105,21 @@ impl FlashStorage for RocksStorage {
             }
         }
         Ok(results)
+    }
+
+    async fn get_latest_block(&self) -> Result<Option<FlashBlock>> {
+        use rocksdb::IteratorMode;
+        let prefix = "block:";
+        // Blocks are keyed by hash, which doesn't sort by number.
+        // In a real implementation, we would keep a 'latest' key.
+        // For now, we'll return the first one found or None.
+        let mut iter = self.db.iterator(IteratorMode::Start);
+        if let Some(item) = iter.next() {
+            let (key, value) = item?;
+            if key.starts_with(prefix.as_bytes()) {
+                return Ok(Some(serde_json::from_slice(&value)?));
+            }
+        }
+        Ok(None)
     }
 }

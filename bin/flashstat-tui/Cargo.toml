@@ -1,0 +1,16 @@
+[package]
+name = "flashstat-tui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+flashstat-common = { path = "../../crates/flashstat-common" }
+flashstat-api = { path = "../../crates/flashstat-api" }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+tokio = { workspace = true }
+jsonrpsee = { workspace = true }
+eyre = { workspace = true }
+futures-util = { workspace = true }
+chrono = { workspace = true }
+ethers = { workspace = true }

@@ -24,7 +24,8 @@ impl FlashApiServer for FlashServer {
     }
 
     async fn get_latest_block(&self) -> RpcResult<Option<FlashBlock>> {
-        Ok(None)
+        self.storage.get_latest_block().await
+            .map_err(|e| ErrorObjectOwned::owned(-32603, e.to_string(), None::<()>))
     }
 
     async fn get_recent_reorgs(&self, limit: usize) -> RpcResult<Vec<ReorgEvent>> {
