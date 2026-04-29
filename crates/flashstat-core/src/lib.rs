@@ -145,6 +145,19 @@ impl FlashMonitor {
                         severity,
                         equivocation,
                     };
+                    
+                    // 3. Optional: Analyze conflicts for Double-Spends
+                    if severity == ReorgSeverity::Equivocation {
+                        let storage = self.storage.clone();
+                        let provider = self.provider.clone();
+                        let event_clone = event.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = analyze_and_update_equivocation(storage, provider, event_clone).await {
+                                warn!("Failed to analyze conflicts: {:?}", e);
+                            }
+                        });
+                    }
+
                     self.storage.save_reorg(event).await?;
                 } else {
                     // Approximate persistence from previous confidence
@@ -187,4 +200,61 @@ impl FlashMonitor {
 fn extract_signature_from_block(_block: &Block<H256>) -> Option<Bytes> {
     // TODO: Implement actual extraction logic for Unichain
     None
+}
+
+async fn analyze_and_update_equivocation(
+    storage: Arc<dyn FlashStorage>,
+    provider: Arc<Provider<Ws>>,
+    mut event: ReorgEvent,
+) -> Result<()> {
+    use flashstat_common::{ConflictAnalysis, DoubleSpendProof};
+    use std::collections::HashMap;
+    use ethers::prelude::*;
+
+    let Some(mut equivocation) = event.equivocation.take() else { return Ok(()) };
+
+    // Fetch full blocks with transactions
+    let (Some(old_block), Some(new_block)) = futures_util::try_join!(
+        provider.get_block_with_txs(event.old_hash),
+        provider.get_block_with_txs(event.new_hash)
+    )? else {
+        return Ok(());
+    };
+
+    let mut dropped_txs = Vec::new();
+    let mut double_spend_txs = Vec::new();
+    
+    // Map new block transactions by sender:nonce for quick lookup
+    let mut new_tx_map = HashMap::new();
+    for tx in &new_block.transactions {
+        new_tx_map.insert((tx.from, tx.nonce), tx.hash);
+    }
+
+    for old_tx in &old_block.transactions {
+        if !new_block.transactions.iter().any(|tx| tx.hash == old_tx.hash) {
+            // Transaction was dropped
+            dropped_txs.push(old_tx.hash);
+
+            // Check if it was replaced by another transaction with same nonce (Double-Spend)
+            if let Some(&new_hash) = new_tx_map.get(&(old_tx.from, old_tx.nonce)) {
+                double_spend_txs.push(DoubleSpendProof {
+                    tx_hash_1: old_tx.hash,
+                    tx_hash_2: new_hash,
+                    sender: old_tx.from,
+                    nonce: old_tx.nonce,
+                });
+            }
+        }
+    }
+
+    equivocation.conflict_analysis = Some(ConflictAnalysis {
+        dropped_txs,
+        double_spend_txs,
+    });
+    event.equivocation = Some(equivocation);
+
+    // Update the reorg event in storage
+    storage.save_reorg(event).await?;
+    
+    Ok(())
 }

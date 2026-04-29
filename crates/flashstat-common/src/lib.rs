@@ -38,6 +38,21 @@ pub struct EquivocationEvent {
     pub signer: Address,
     pub signature_1: Bytes,
     pub signature_2: Bytes,
+    pub conflict_analysis: Option<ConflictAnalysis>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConflictAnalysis {
+    pub dropped_txs: Vec<H256>,
+    pub double_spend_txs: Vec<DoubleSpendProof>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DoubleSpendProof {
+    pub tx_hash_1: H256,
+    pub tx_hash_2: H256,
+    pub sender: Address,
+    pub nonce: U256,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
