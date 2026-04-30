@@ -152,72 +152,99 @@ impl FlashApiServer for FlashServer {
     }
 }
 
-#[tokio::main]
-async fn main() -> eyre::Result<()> {
+fn init_logging() {
     tracing_subscriber::fmt::init();
+}
 
-    let config = Config::load().context("Failed to load config")?;
+fn load_configuration() -> eyre::Result<Config> {
+    Config::load().context("Failed to load config")
+}
 
-    // 1. Initialize Shutdown Signal
-    let (shutdown_tx, _) = broadcast::channel(1);
-
-    // 2. Initialize Storage
-    let storage = std::sync::Arc::new(flashstat_db::RedbStorage::new(&config.storage.db_path)?);
-
-    // 3. Initialize Monitor
-    let monitor = Arc::new(
-        flashstat_core::FlashMonitor::new(config.clone(), storage.clone(), shutdown_tx.subscribe())
-            .await?,
-    );
-    let block_tx = monitor.block_notifier();
-    let event_tx = monitor.event_notifier();
-
-    // 3. Start Monitor in background
-    let monitor_clone = monitor.clone();
+fn start_monitor(monitor: Arc<flashstat_core::FlashMonitor>) {
     tokio::spawn(async move {
-        if let Err(e) = monitor_clone.run().await {
+        if let Err(e) = monitor.run().await {
             tracing::error!("Monitor error: {:?}", e);
         }
     });
+}
 
-    // 4. Start JSON-RPC Server with Pub/Sub support
-    let server = ServerBuilder::default().build("127.0.0.1:9944").await?;
+fn start_stats_tracking(
+    server_state: &FlashServer,
+    mut block_rx: broadcast::Receiver<FlashBlock>,
+    mut event_rx: broadcast::Receiver<ReorgEvent>,
+) {
+    let server_blocks = server_state.clone();
+    let server_events = server_state.clone();
+
+    tokio::spawn(async move {
+        while block_rx.recv().await.is_ok() {
+            server_blocks.total_blocks.fetch_add(1, Ordering::Relaxed);
+        }
+    });
+
+    tokio::spawn(async move {
+        while event_rx.recv().await.is_ok() {
+            server_events.total_reorgs.fetch_add(1, Ordering::Relaxed);
+        }
+    });
+}
+
+async fn build_server_state(
+    config: &Config,
+    storage: Arc<flashstat_db::RedbStorage>,
+    monitor: Arc<flashstat_core::FlashMonitor>,
+    block_tx: broadcast::Sender<FlashBlock>,
+    event_tx: broadcast::Sender<ReorgEvent>,
+) -> eyre::Result<FlashServer> {
     let initial_reorgs = storage
         .get_latest_reorgs(1000)
         .await
         .unwrap_or_default()
         .len() as u64;
 
-    let server_struct = FlashServer {
-        storage: storage.clone(),
-        block_tx: block_tx.clone(),
-        event_tx: event_tx.clone(),
+    Ok(FlashServer {
+        storage,
+        block_tx,
+        event_tx,
         start_time: Instant::now(),
         total_blocks: Arc::new(AtomicU64::new(0)),
         total_reorgs: Arc::new(AtomicU64::new(initial_reorgs)),
         db_path: config.storage.db_path.clone(),
-        monitor: monitor.clone(),
-    };
+        monitor,
+    })
+}
 
-    // Stats listeners
-    let mut stats_block_rx = block_tx.subscribe();
-    let mut stats_event_rx = event_tx.subscribe();
-    let server_stats_1 = server_struct.clone();
-    let server_stats_2 = server_struct.clone();
+#[tokio::main]
+async fn main() -> eyre::Result<()> {
+    init_logging();
+    let config = load_configuration()?;
 
-    tokio::spawn(async move {
-        while stats_block_rx.recv().await.is_ok() {
-            server_stats_1.total_blocks.fetch_add(1, Ordering::Relaxed);
-        }
-    });
+    let (shutdown_tx, _) = broadcast::channel(1);
+    let storage = Arc::new(flashstat_db::RedbStorage::new(&config.storage.db_path)?);
 
-    tokio::spawn(async move {
-        while stats_event_rx.recv().await.is_ok() {
-            server_stats_2.total_reorgs.fetch_add(1, Ordering::Relaxed);
-        }
-    });
+    let monitor = Arc::new(
+        flashstat_core::FlashMonitor::new(config.clone(), storage.clone(), shutdown_tx.subscribe())
+            .await?,
+    );
 
-    let handle = server.start(server_struct.into_rpc());
+    let block_tx = monitor.block_notifier();
+    let event_tx = monitor.event_notifier();
+
+    start_monitor(monitor.clone());
+
+    let server_state = build_server_state(
+        &config,
+        storage,
+        monitor,
+        block_tx.clone(),
+        event_tx.clone(),
+    )
+    .await?;
+
+    start_stats_tracking(&server_state, block_tx.subscribe(), event_tx.subscribe());
+
+    let server = ServerBuilder::default().build("127.0.0.1:9944").await?;
+    let handle = server.start(server_state.into_rpc());
 
     info!("🏮 FlashStat JSON-RPC Server (with Pub/Sub) started at 127.0.0.1:9944");
 
