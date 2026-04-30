@@ -201,30 +201,7 @@ fn ui(f: &mut Frame, app: &App) {
         )
         .split(f.size());
 
-    // Title / Confidence Gauge
-    let status_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)].as_ref())
-        .split(chunks[0]);
-
-    let title = Paragraph::new(format!(
-        " 🏮 FlashStat Dashboard | Confidence: {:.2}%",
-        app.latest_confidence
-    ))
-    .block(Block::default().borders(Borders::ALL).title("Status"));
-    f.render_widget(title, status_chunks[0]);
-
-    let stats_text = if let Some(h) = &app.health {
-        format!(
-            " Uptime: {}s | Blocks: {} | Alerts: {} ",
-            h.uptime_secs, h.total_blocks, h.total_reorgs
-        )
-    } else {
-        " Connecting... ".to_string()
-    };
-    let stats = Paragraph::new(stats_text)
-        .block(Block::default().borders(Borders::ALL).title("System Stats"));
-    f.render_widget(stats, status_chunks[1]);
+    render_header(f, app, chunks[0]);
 
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -238,7 +215,40 @@ fn ui(f: &mut Frame, app: &App) {
         )
         .split(chunks[1]);
 
-    // Block Feed
+    render_block_feed(f, app, main_chunks[0]);
+    render_sequencer_reputation(f, app, main_chunks[1]);
+    render_reorg_log(f, app, main_chunks[2]);
+    render_analysis_details(f, app, chunks[2]);
+    render_controls(f, chunks[3]);
+}
+
+fn render_header(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)].as_ref())
+        .split(area);
+
+    let title = Paragraph::new(format!(
+        " 🏮 FlashStat Dashboard | Confidence: {:.2}%",
+        app.latest_confidence
+    ))
+    .block(Block::default().borders(Borders::ALL).title("Status"));
+    f.render_widget(title, chunks[0]);
+
+    let stats_text = if let Some(h) = &app.health {
+        format!(
+            " Uptime: {}s | Blocks: {} | Alerts: {} ",
+            h.uptime_secs, h.total_blocks, h.total_reorgs
+        )
+    } else {
+        " Connecting... ".to_string()
+    };
+    let stats = Paragraph::new(stats_text)
+        .block(Block::default().borders(Borders::ALL).title("System Stats"));
+    f.render_widget(stats, chunks[1]);
+}
+
+fn render_block_feed(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let blocks: Vec<ListItem> = app
         .blocks
         .iter()
@@ -265,9 +275,10 @@ fn ui(f: &mut Frame, app: &App) {
             .borders(Borders::ALL)
             .title("Live Block Feed"),
     );
-    f.render_widget(block_list, main_chunks[0]);
+    f.render_widget(block_list, area);
+}
 
-    // Sequencer Reputation
+fn render_sequencer_reputation(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let sequencers: Vec<ListItem> = app
         .sequencers
         .iter()
@@ -296,9 +307,10 @@ fn ui(f: &mut Frame, app: &App) {
             .borders(Borders::ALL)
             .title("Sequencer Reputation"),
     );
-    f.render_widget(sequencer_list, main_chunks[1]);
+    f.render_widget(sequencer_list, area);
+}
 
-    // Reorg Log
+fn render_reorg_log(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let reorgs: Vec<ListItem> = app
         .reorgs
         .iter()
@@ -334,9 +346,10 @@ fn ui(f: &mut Frame, app: &App) {
         )
         .highlight_symbol(">> ");
 
-    f.render_widget(reorg_list, main_chunks[2]);
+    f.render_widget(reorg_list, area);
+}
 
-    // Analysis Details
+fn render_analysis_details(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let details_content = if let Some(reorg) = app.reorgs.get(app.selected_reorg) {
         let mut lines = vec![Line::from(vec![
             Span::styled("Event: ", Style::default().add_modifier(Modifier::BOLD)),
@@ -395,10 +408,11 @@ fn ui(f: &mut Frame, app: &App) {
             .borders(Borders::ALL)
             .title("Analysis Forensics (Selected Event)"),
     );
-    f.render_widget(details, chunks[2]);
+    f.render_widget(details, area);
+}
 
-    // Controls
+fn render_controls(f: &mut Frame, area: ratatui::layout::Rect) {
     let help = Paragraph::new(" [q] Quit | [↑/↓] Select Alert | [r] Refresh Proofs ")
         .block(Block::default().borders(Borders::ALL).title("Controls"));
-    f.render_widget(help, chunks[3]);
+    f.render_widget(help, area);
 }
