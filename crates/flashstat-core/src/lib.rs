@@ -150,20 +150,18 @@ impl FlashMonitor {
         Ok(())
     }
 
-    pub async fn handle_new_block(&self, eth_block: Block<H256>) -> Result<()> {
-        let hash = eth_block.hash.unwrap_or_default();
-        let number: U256 = eth_block.number.unwrap_or_default().as_u64().into();
-
-        let mut last_block_guard = self.last_block.lock().await;
-
-        let mut persistence = 1;
-        let mut sequencer_signature = None;
-        let mut signer = None;
+    fn verify_tee_signature(
+        &self,
+        eth_block: &Block<H256>,
+        hash: H256,
+        number: U256,
+    ) -> (bool, f64, Option<Address>, Option<Bytes>) {
         let mut tee_valid = false;
         let mut confidence = 0.0;
+        let mut signer = None;
+        let mut sequencer_signature = None;
 
-        // 1. Recover TEE signature and signer identity
-        if let Some(sig_bytes) = extract_signature_from_block(&eth_block) {
+        if let Some(sig_bytes) = extract_signature_from_block(eth_block) {
             match self.tee_verifier.recover_signer(hash, &sig_bytes) {
                 Ok(recovered_signer) => {
                     signer = Some(recovered_signer);
@@ -178,7 +176,7 @@ impl FlashMonitor {
                         );
 
                         if self.config.tee.attestation_enabled {
-                            if let Some(quote) = extract_quote_from_block(&eth_block) {
+                            if let Some(quote) = extract_quote_from_block(eth_block) {
                                 match self.tee_verifier.verify_tdx_attestation(
                                     &quote,
                                     self.config.tee.expected_mrenclave.as_deref(),
@@ -225,114 +223,137 @@ impl FlashMonitor {
                 }
             }
         }
+        (tee_valid, confidence, signer, sequencer_signature)
+    }
+
+    async fn process_reorg(
+        &self,
+        number: U256,
+        hash: H256,
+        prev: &FlashBlock,
+        sequencer_signature: &Option<Bytes>,
+        signer: &Option<Address>,
+    ) -> Result<()> {
+        let mut severity = ReorgSeverity::Soft;
+        let mut equivocation = None;
+
+        // Detect Equivocation: Same block number, different hash, same signer
+        let equivocation_check = (
+            &prev.sequencer_signature,
+            sequencer_signature,
+            &prev.signer,
+            signer,
+        );
+        if let (Some(sig1), Some(sig2), Some(signer1), Some(signer2)) = equivocation_check {
+            #[allow(clippy::collapsible_if)]
+            if signer1 == signer2 {
+                severity = ReorgSeverity::Equivocation;
+                equivocation = Some(EquivocationEvent {
+                    signer: *signer1,
+                    signature_1: sig1.clone(),
+                    signature_2: sig2.clone(),
+                    conflict_analysis: None,
+                });
+                warn!(
+                    "🚨 EQUIVOCATION DETECTED at block #{} by signer {:?}!",
+                    number, signer1
+                );
+            }
+        }
+
+        if severity == ReorgSeverity::Soft {
+            warn!("🚨 Soft Reorg detected at block #{}!", number);
+        }
+
+        let event = ReorgEvent {
+            block_number: number,
+            old_hash: prev.hash,
+            new_hash: hash,
+            detected_at: Utc::now(),
+            severity,
+            equivocation,
+        };
+
+        if severity == ReorgSeverity::Equivocation {
+            let storage = self.storage.clone();
+            let provider = self.provider.clone();
+            let event_clone = event.clone();
+            let guardian = self.guardian_wallet.clone();
+            let sig1 = prev.sequencer_signature.clone().unwrap_or_default();
+            let sig2 = sequencer_signature.clone().unwrap_or_default();
+            let signer_addr = signer.unwrap_or_default();
+            let old_hash = prev.hash;
+            let new_hash = hash;
+            let block_number = number;
+
+            tokio::spawn(async move {
+                if let Err(e) =
+                    analyze_and_update_equivocation(storage, provider, event_clone).await
+                {
+                    warn!("Failed to analyze conflicts: {:?}", e);
+                }
+
+                // Active Fraud Proof Submission
+                if let Some(wallet) = guardian {
+                    info!("🗼 Watchtower: Generating on-chain equivocation proof...");
+                    let proof = proof::encode_equivocation_proof(
+                        block_number,
+                        signer_addr,
+                        sig1,
+                        sig2,
+                        old_hash,
+                        new_hash,
+                    );
+                    match wallet.submit_equivocation_proof(proof).await {
+                        Ok(tx_hash) => info!(
+                            "🚀 ACTIVE PROTECTION: Slashing proof submitted! TX: {:?}",
+                            tx_hash
+                        ),
+                        Err(e) => {
+                            error!("❌ Watchtower FAILED to submit proof: {:?}", e)
+                        }
+                    }
+                }
+            });
+        }
+
+        self.storage.save_reorg(event.clone()).await?;
+        let _ = self.event_tx.send(event.clone());
+
+        // Update Reputation Penalties
+        if let Some(signer_addr) = signer {
+            let (soft, equiv) = if severity == ReorgSeverity::Equivocation {
+                (0, 1)
+            } else {
+                (1, 0)
+            };
+            if let Err(e) = self
+                .update_reputation(*signer_addr, 0, soft, equiv, false)
+                .await
+            {
+                error!("Failed to apply reputation penalty: {:?}", e);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn handle_new_block(&self, eth_block: Block<H256>) -> Result<()> {
+        let hash = eth_block.hash.unwrap_or_default();
+        let number: U256 = eth_block.number.unwrap_or_default().as_u64().into();
+
+        let mut last_block_guard = self.last_block.lock().await;
+
+        let (tee_valid, tee_confidence, signer, sequencer_signature) =
+            self.verify_tee_signature(&eth_block, hash, number);
+        let mut persistence = 1;
 
         // 2. Detection of Reorgs and Equivocations
         if let Some(ref prev) = *last_block_guard {
             if prev.number == number {
                 if prev.hash != hash {
-                    let mut severity = ReorgSeverity::Soft;
-                    let mut equivocation = None;
-
-                    // Detect Equivocation: Same block number, different hash, same signer
-                    let equivocation_check = (
-                        &prev.sequencer_signature,
-                        &sequencer_signature,
-                        &prev.signer,
-                        &signer,
-                    );
-                    if let (Some(sig1), Some(sig2), Some(signer1), Some(signer2)) =
-                        equivocation_check
-                    {
-                        #[allow(clippy::collapsible_if)]
-                        if signer1 == signer2 {
-                            severity = ReorgSeverity::Equivocation;
-                            equivocation = Some(EquivocationEvent {
-                                signer: *signer1,
-                                signature_1: sig1.clone(),
-                                signature_2: sig2.clone(),
-                                conflict_analysis: None,
-                            });
-                            warn!(
-                                "🚨 EQUIVOCATION DETECTED at block #{} by signer {:?}!",
-                                number, signer1
-                            );
-                        }
-                    }
-
-                    if severity == ReorgSeverity::Soft {
-                        warn!("🚨 Soft Reorg detected at block #{}!", number);
-                    }
-
-                    let event = ReorgEvent {
-                        block_number: number,
-                        old_hash: prev.hash,
-                        new_hash: hash,
-                        detected_at: Utc::now(),
-                        severity,
-                        equivocation,
-                    };
-
-                    if severity == ReorgSeverity::Equivocation {
-                        let storage = self.storage.clone();
-                        let provider = self.provider.clone();
-                        let event_clone = event.clone();
-                        let guardian = self.guardian_wallet.clone();
-                        let sig1 = prev.sequencer_signature.clone().unwrap_or_default();
-                        let sig2 = sequencer_signature.clone().unwrap_or_default();
-                        let signer_addr = signer.unwrap_or_default();
-                        let old_hash = prev.hash;
-                        let new_hash = hash;
-                        let block_number = number;
-
-                        tokio::spawn(async move {
-                            if let Err(e) =
-                                analyze_and_update_equivocation(storage, provider, event_clone)
-                                    .await
-                            {
-                                warn!("Failed to analyze conflicts: {:?}", e);
-                            }
-
-                            // Active Fraud Proof Submission
-                            if let Some(wallet) = guardian {
-                                info!("🗼 Watchtower: Generating on-chain equivocation proof...");
-                                let proof = proof::encode_equivocation_proof(
-                                    block_number,
-                                    signer_addr,
-                                    sig1,
-                                    sig2,
-                                    old_hash,
-                                    new_hash,
-                                );
-                                match wallet.submit_equivocation_proof(proof).await {
-                                    Ok(tx_hash) => info!(
-                                        "🚀 ACTIVE PROTECTION: Slashing proof submitted! TX: {:?}",
-                                        tx_hash
-                                    ),
-                                    Err(e) => {
-                                        error!("❌ Watchtower FAILED to submit proof: {:?}", e)
-                                    }
-                                }
-                            }
-                        });
-                    }
-
-                    self.storage.save_reorg(event.clone()).await?;
-                    let _ = self.event_tx.send(event.clone());
-
-                    // Update Reputation Penalties
-                    if let Some(signer_addr) = signer {
-                        let (soft, equiv) = if severity == ReorgSeverity::Equivocation {
-                            (0, 1)
-                        } else {
-                            (1, 0)
-                        };
-                        if let Err(e) = self
-                            .update_reputation(signer_addr, 0, soft, equiv, false)
-                            .await
-                        {
-                            error!("Failed to apply reputation penalty: {:?}", e);
-                        }
-                    }
+                    self.process_reorg(number, hash, prev, &sequencer_signature, &signer)
+                        .await?;
                 }
             } else if prev.number < number {
                 // Approximate persistence from previous confidence
@@ -348,8 +369,8 @@ impl FlashMonitor {
         };
 
         // Use the TEE-specific override if available, otherwise use final_confidence
-        let confidence = if confidence > 0.0 {
-            confidence
+        let confidence = if tee_confidence > 0.0 {
+            tee_confidence
         } else {
             final_confidence
         };
