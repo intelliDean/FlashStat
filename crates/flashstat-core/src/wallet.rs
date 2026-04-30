@@ -1,5 +1,5 @@
 use ethers::prelude::*;
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 use flashstat_common::GuardianConfig;
 use std::sync::Arc;
 
