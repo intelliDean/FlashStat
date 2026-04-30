@@ -219,3 +219,259 @@ impl FlashStorage for RedbStorage {
         Ok(results)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use ethers::types::{Address, H256, U256};
+    use flashstat_common::{
+        BlockStatus, EquivocationEvent, FlashBlock, ReorgEvent, ReorgSeverity, SequencerStats,
+    };
+    use tempfile::tempdir;
+
+    fn make_block(number: u64, hash: H256) -> FlashBlock {
+        FlashBlock {
+            number: U256::from(number),
+            hash,
+            parent_hash: H256::random(),
+            timestamp: Utc::now(),
+            sequencer_signature: None,
+            signer: None,
+            confidence: 50.0,
+            status: BlockStatus::Pending,
+        }
+    }
+
+    fn make_reorg(block_number: u64, severity: ReorgSeverity) -> ReorgEvent {
+        ReorgEvent {
+            block_number: U256::from(block_number),
+            old_hash: H256::random(),
+            new_hash: H256::random(),
+            detected_at: Utc::now(),
+            severity,
+            equivocation: if severity == ReorgSeverity::Equivocation {
+                Some(EquivocationEvent {
+                    signer: Address::random(),
+                    signature_1: vec![0u8; 65].into(),
+                    signature_2: vec![1u8; 65].into(),
+                    conflict_analysis: None,
+                })
+            } else {
+                None
+            },
+        }
+    }
+
+    fn open_storage() -> RedbStorage {
+        let dir = tempdir().unwrap();
+        #[allow(deprecated)]
+        let path = dir.into_path().join("test.db");
+        RedbStorage::new(path.to_str().unwrap()).unwrap()
+    }
+
+    // ── Blocks ──────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_save_and_get_block() {
+        let db = open_storage();
+        let hash = H256::random();
+        let block = make_block(1, hash);
+
+        db.save_block(block.clone()).await.unwrap();
+
+        let retrieved = db.get_block(hash).await.unwrap().unwrap();
+        assert_eq!(retrieved.hash, hash);
+        assert_eq!(retrieved.number, U256::from(1u64));
+    }
+
+    #[tokio::test]
+    async fn test_get_block_returns_none_for_unknown_hash() {
+        let db = open_storage();
+        let result = db.get_block(H256::random()).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_latest_block_tracks_most_recent() {
+        let db = open_storage();
+
+        let block_1 = make_block(1, H256::random());
+        let block_2 = make_block(2, H256::random());
+        let hash_2 = block_2.hash;
+
+        db.save_block(block_1).await.unwrap();
+        db.save_block(block_2).await.unwrap();
+
+        let latest = db.get_latest_block().await.unwrap().unwrap();
+        assert_eq!(latest.hash, hash_2, "latest block should be block 2");
+    }
+
+    #[tokio::test]
+    async fn test_get_latest_block_returns_none_on_empty_db() {
+        let db = open_storage();
+        let result = db.get_latest_block().await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_recent_blocks_returns_in_descending_order() {
+        let db = open_storage();
+
+        for i in 1u64..=5 {
+            db.save_block(make_block(i, H256::random())).await.unwrap();
+        }
+
+        let blocks = db.get_recent_blocks(3).await.unwrap();
+        assert_eq!(blocks.len(), 3);
+        // Should be blocks 5, 4, 3 (most recent first)
+        assert_eq!(blocks[0].number, U256::from(5u64));
+        assert_eq!(blocks[1].number, U256::from(4u64));
+        assert_eq!(blocks[2].number, U256::from(3u64));
+    }
+
+    #[tokio::test]
+    async fn test_get_recent_blocks_respects_limit() {
+        let db = open_storage();
+        for i in 1u64..=10 {
+            db.save_block(make_block(i, H256::random())).await.unwrap();
+        }
+
+        let blocks = db.get_recent_blocks(4).await.unwrap();
+        assert_eq!(blocks.len(), 4);
+    }
+
+    // ── Reorgs ──────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_save_and_retrieve_soft_reorg() {
+        let db = open_storage();
+        let event = make_reorg(100, ReorgSeverity::Soft);
+
+        db.save_reorg(event.clone()).await.unwrap();
+
+        let reorgs = db.get_latest_reorgs(10).await.unwrap();
+        assert_eq!(reorgs.len(), 1);
+        assert_eq!(reorgs[0].block_number, U256::from(100u64));
+        assert_eq!(reorgs[0].severity, ReorgSeverity::Soft);
+    }
+
+    #[tokio::test]
+    async fn test_get_equivocations_filters_correctly() {
+        let db = open_storage();
+
+        db.save_reorg(make_reorg(1, ReorgSeverity::Soft))
+            .await
+            .unwrap();
+        db.save_reorg(make_reorg(2, ReorgSeverity::Equivocation))
+            .await
+            .unwrap();
+        db.save_reorg(make_reorg(3, ReorgSeverity::Soft))
+            .await
+            .unwrap();
+        db.save_reorg(make_reorg(4, ReorgSeverity::Equivocation))
+            .await
+            .unwrap();
+
+        let equivocations = db.get_equivocations(10).await.unwrap();
+        assert_eq!(equivocations.len(), 2);
+        assert!(
+            equivocations
+                .iter()
+                .all(|e| e.severity == ReorgSeverity::Equivocation)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_latest_reorgs_respects_limit() {
+        let db = open_storage();
+        for i in 0..5 {
+            db.save_reorg(make_reorg(i, ReorgSeverity::Soft))
+                .await
+                .unwrap();
+        }
+
+        let reorgs = db.get_latest_reorgs(2).await.unwrap();
+        assert_eq!(reorgs.len(), 2);
+    }
+
+    // ── Sequencer Stats ──────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_update_and_get_sequencer_stats() {
+        let db = open_storage();
+        let address = Address::random();
+
+        let stats = SequencerStats {
+            address,
+            total_blocks_signed: 42,
+            total_attested_blocks: 10,
+            total_soft_reorgs: 1,
+            total_equivocations: 0,
+            current_streak: 42,
+            reputation_score: 500,
+            last_active: Utc::now(),
+        };
+
+        db.update_sequencer_stats(stats.clone()).await.unwrap();
+
+        let retrieved = db.get_sequencer_stats(address).await.unwrap().unwrap();
+        assert_eq!(retrieved.address, address);
+        assert_eq!(retrieved.total_blocks_signed, 42);
+        assert_eq!(retrieved.reputation_score, 500);
+    }
+
+    #[tokio::test]
+    async fn test_get_sequencer_stats_returns_none_for_unknown_address() {
+        let db = open_storage();
+        let result = db.get_sequencer_stats(Address::random()).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_all_sequencer_stats() {
+        let db = open_storage();
+
+        for i in 0u64..3 {
+            let address = Address::random();
+            db.update_sequencer_stats(SequencerStats {
+                address,
+                reputation_score: i as i64 * 100,
+                last_active: Utc::now(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        }
+
+        let all = db.get_all_sequencer_stats().await.unwrap();
+        assert_eq!(all.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_update_sequencer_stats_overwrites_existing() {
+        let db = open_storage();
+        let address = Address::random();
+
+        db.update_sequencer_stats(SequencerStats {
+            address,
+            reputation_score: 100,
+            last_active: Utc::now(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+        db.update_sequencer_stats(SequencerStats {
+            address,
+            reputation_score: 999,
+            last_active: Utc::now(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+        let stats = db.get_sequencer_stats(address).await.unwrap().unwrap();
+        assert_eq!(stats.reputation_score, 999);
+    }
+}

@@ -1377,11 +1377,14 @@ name = "flashstat-db"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "ethers",
  "eyre",
  "flashstat-common",
  "redb",
  "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -1441,7 +1444,11 @@ dependencies = [
  "chrono",
  "ethers",
  "eyre",
+ "flashstat-common",
+ "flashstat-core",
+ "flashstat-db",
  "jsonrpsee",
+ "tempfile",
  "tokio",
 ]
 

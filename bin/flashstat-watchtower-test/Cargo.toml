@@ -3,9 +3,19 @@ name = "flashstat-watchtower-test"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "flashstat-watchtower-test"
+path = "src/main.rs"
+
 [dependencies]
 tokio = { workspace = true }
 ethers = { workspace = true }
 eyre = { workspace = true }
 jsonrpsee = { workspace = true }
 chrono = { workspace = true }
+flashstat-core = { path = "../../crates/flashstat-core" }
+flashstat-db = { path = "../../crates/flashstat-db" }
+flashstat-common = { path = "../../crates/flashstat-common" }
+
+[dev-dependencies]
+tempfile = "3.8"
