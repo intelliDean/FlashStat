@@ -109,51 +109,15 @@ impl App {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn setup_terminal() -> Result<Terminal<CrosstermBackend<std::io::Stdout>>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    Terminal::new(backend).map_err(Into::into)
+}
 
-    let client = HttpClientBuilder::default().build("http://127.0.0.1:9944")?;
-
-    let mut app = App::new();
-    let _ = app.init(&client).await;
-    let tick_rate = Duration::from_millis(200);
-
-    loop {
-        terminal.draw(|f| ui(f, &app))?;
-
-        let timeout = tick_rate
-            .checked_sub(app.last_tick.elapsed())
-            .unwrap_or_default();
-
-        #[allow(clippy::collapsible_if)]
-        if event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Char('q') => break,
-                    KeyCode::Down
-                        if !app.reorgs.is_empty() && app.selected_reorg < app.reorgs.len() - 1 =>
-                    {
-                        app.selected_reorg += 1;
-                    }
-                    KeyCode::Up if app.selected_reorg > 0 => {
-                        app.selected_reorg -= 1;
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        if app.last_tick.elapsed() >= tick_rate {
-            app.on_tick(&client).await?;
-            app.last_tick = Instant::now();
-        }
-    }
-
+fn restore_terminal(mut terminal: Terminal<CrosstermBackend<std::io::Stdout>>) -> Result<()> {
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -161,8 +125,66 @@ async fn main() -> Result<()> {
         DisableMouseCapture
     )?;
     terminal.show_cursor()?;
-
     Ok(())
+}
+
+async fn run_app(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    mut app: App,
+    client: &(impl FlashApiClient + Sync),
+    tick_rate: Duration,
+) -> Result<()> {
+    loop {
+        terminal.draw(|f| ui(f, &app))?;
+
+        let timeout = tick_rate
+            .checked_sub(app.last_tick.elapsed())
+            .unwrap_or_default();
+
+        if event::poll(timeout)? {
+            if let Event::Key(key) = event::read()? {
+                if handle_key_events(key, &mut app) {
+                    break;
+                }
+            }
+        }
+
+        if app.last_tick.elapsed() >= tick_rate {
+            app.on_tick(client).await?;
+            app.last_tick = Instant::now();
+        }
+    }
+    Ok(())
+}
+
+fn handle_key_events(key: event::KeyEvent, app: &mut App) -> bool {
+    match key.code {
+        KeyCode::Char('q') => return true,
+        KeyCode::Down if !app.reorgs.is_empty() && app.selected_reorg < app.reorgs.len() - 1 => {
+            app.selected_reorg += 1;
+        }
+        KeyCode::Up if app.selected_reorg > 0 => {
+            app.selected_reorg -= 1;
+        }
+        _ => {}
+    }
+    false
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let mut terminal = setup_terminal()?;
+
+    let client = HttpClientBuilder::default().build("http://127.0.0.1:9944")?;
+    let mut app = App::new();
+    let _ = app.init(&client).await;
+    let tick_rate = Duration::from_millis(200);
+
+    let res = run_app(&mut terminal, app, &client, tick_rate).await;
+
+    restore_terminal(terminal)?;
+
+    res
 }
 
 fn ui(f: &mut Frame, app: &App) {
