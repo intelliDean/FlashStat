@@ -1,9 +1,11 @@
 use ethers::types::H256;
 use eyre::Context;
 use flashstat_api::FlashApiServer;
-use flashstat_common::{Config, FlashBlock, ReorgEvent, ReorgSeverity, SequencerStats, SystemHealth};
+use flashstat_common::{
+    Config, FlashBlock, ReorgEvent, ReorgSeverity, SequencerStats, SystemHealth,
+};
 use flashstat_db::FlashStorage;
-use jsonrpsee::core::{async_trait, RpcResult};
+use jsonrpsee::core::{RpcResult, async_trait};
 use jsonrpsee::server::ServerBuilder;
 use jsonrpsee::types::error::ErrorObjectOwned;
 use std::sync::Arc;
@@ -74,7 +76,7 @@ impl FlashApiServer for FlashServer {
             .map(|m| m.len())
             .unwrap_or(0);
 
-        Ok(SystemHealth {
+        Ok(flashstat_common::SystemHealth {
             uptime_secs: self.start_time.elapsed().as_secs(),
             total_blocks: self.total_blocks.load(Ordering::Relaxed),
             total_reorgs: self.total_reorgs.load(Ordering::Relaxed),
