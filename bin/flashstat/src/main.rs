@@ -4,22 +4,22 @@ use flashstat_core::FlashMonitor;
 use tokio::sync::broadcast;
 use tracing::{error, info};
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    // 1. Initialize Logging
+fn init_logging() {
     tracing_subscriber::fmt::init();
+}
 
-    // 2. Load Configuration
+fn load_configuration() -> Result<Config> {
     let config = Config::load().context(
         "Failed to load configuration. Ensure flashstat.toml exists or env vars are set.",
     )?;
     info!("🏮 Config loaded: WS={}", config.rpc.ws_url);
+    Ok(config)
+}
 
-    // 3. Setup Shutdown Coordination
+fn setup_shutdown_signal() -> broadcast::Sender<()> {
     let (shutdown_tx, _) = broadcast::channel(1);
     let shutdown_tx_signal = shutdown_tx.clone();
 
-    // 4. Handle OS Signals
     tokio::spawn(async move {
         tokio::signal::ctrl_c()
             .await
@@ -28,10 +28,17 @@ async fn main() -> Result<()> {
         let _ = shutdown_tx_signal.send(());
     });
 
-    // 5. Initialize Storage
-    let storage = std::sync::Arc::new(flashstat_db::RedbStorage::new(&config.storage.db_path)?);
+    shutdown_tx
+}
 
-    // 6. Run Monitor
+#[tokio::main]
+async fn main() -> Result<()> {
+    init_logging();
+
+    let config = load_configuration()?;
+    let shutdown_tx = setup_shutdown_signal();
+
+    let storage = std::sync::Arc::new(flashstat_db::RedbStorage::new(&config.storage.db_path)?);
     let monitor = FlashMonitor::new(config, storage, shutdown_tx.subscribe()).await?;
 
     if let Err(e) = monitor.run().await {
