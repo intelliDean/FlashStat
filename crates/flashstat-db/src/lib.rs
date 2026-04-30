@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use ethers::types::H256;
 use eyre::Result;
-use flashstat_common::{FlashBlock, ReorgEvent};
+use flashstat_common::{FlashBlock, ReorgEvent, SequencerStats};
 use redb::{Database, ReadableTable, TableDefinition};
 use std::sync::Arc;
 
@@ -21,9 +21,12 @@ pub trait FlashStorage: Send + Sync {
     async fn get_equivocations(&self, limit: usize) -> Result<Vec<ReorgEvent>>;
     async fn get_latest_block(&self) -> Result<Option<FlashBlock>>;
     async fn get_recent_blocks(&self, limit: usize) -> Result<Vec<FlashBlock>>;
-    async fn update_sequencer_stats(&self, stats: flashstat_common::SequencerStats) -> Result<()>;
-    async fn get_sequencer_stats(&self, address: ethers::types::Address) -> Result<Option<flashstat_common::SequencerStats>>;
-    async fn get_all_sequencer_stats(&self) -> Result<Vec<flashstat_common::SequencerStats>>;
+    async fn update_sequencer_stats(&self, stats: SequencerStats) -> Result<()>;
+    async fn get_sequencer_stats(
+        &self,
+        address: ethers::types::Address,
+    ) -> Result<Option<SequencerStats>>;
+    async fn get_all_sequencer_stats(&self) -> Result<Vec<SequencerStats>>;
 }
 
 pub struct RedbStorage {
@@ -68,7 +71,7 @@ impl FlashStorage for RedbStorage {
         {
             let mut table = write_txn.open_table(BLOCKS_TABLE)?;
             table.insert(key, val.as_slice())?;
-            
+
             let mut meta = write_txn.open_table(META_TABLE)?;
             meta.insert(LATEST_BLOCK_KEY, key)?;
 
@@ -145,7 +148,7 @@ impl FlashStorage for RedbStorage {
     async fn get_latest_block(&self) -> Result<Option<FlashBlock>> {
         let read_txn = self.db.begin_read()?;
         let meta = read_txn.open_table(META_TABLE)?;
-        
+
         if let Some(hash_val) = meta.get(LATEST_BLOCK_KEY)? {
             let hash_bytes = hash_val.value();
             let table = read_txn.open_table(BLOCKS_TABLE)?;
@@ -153,7 +156,7 @@ impl FlashStorage for RedbStorage {
                 return Ok(Some(serde_json::from_slice(block_val.value())?));
             }
         }
-        
+
         Ok(None)
     }
 
@@ -176,7 +179,7 @@ impl FlashStorage for RedbStorage {
         Ok(results)
     }
 
-    async fn update_sequencer_stats(&self, stats: flashstat_common::SequencerStats) -> Result<()> {
+    async fn update_sequencer_stats(&self, stats: SequencerStats) -> Result<()> {
         let key = stats.address.as_bytes();
         let val = serde_json::to_vec(&stats)?;
 
@@ -189,7 +192,10 @@ impl FlashStorage for RedbStorage {
         Ok(())
     }
 
-    async fn get_sequencer_stats(&self, address: ethers::types::Address) -> Result<Option<flashstat_common::SequencerStats>> {
+    async fn get_sequencer_stats(
+        &self,
+        address: ethers::types::Address,
+    ) -> Result<Option<SequencerStats>> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(SEQUENCERS_TABLE)?;
         let val = table.get(address.as_bytes())?;
@@ -201,7 +207,7 @@ impl FlashStorage for RedbStorage {
         }
     }
 
-    async fn get_all_sequencer_stats(&self) -> Result<Vec<flashstat_common::SequencerStats>> {
+    async fn get_all_sequencer_stats(&self) -> Result<Vec<SequencerStats>> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(SEQUENCERS_TABLE)?;
 

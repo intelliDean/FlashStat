@@ -1,5 +1,5 @@
-use ethers::utils::rlp::{Encodable, RlpStream};
 use ethers::types::{Address, Bytes, H256, U256};
+use ethers::utils::rlp::{Encodable, RlpStream};
 use flashstat_common::DoubleSpendProof;
 
 pub struct DoubleSpendProofRLP {

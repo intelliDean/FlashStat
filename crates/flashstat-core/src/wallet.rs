@@ -1,7 +1,7 @@
 use ethers::prelude::*;
 use eyre::{Result, eyre};
-use std::sync::Arc;
 use flashstat_common::GuardianConfig;
+use std::sync::Arc;
 
 abigen!(
     SlashingManager,
@@ -23,8 +23,9 @@ impl GuardianWallet {
         let wallet = if let Some(pk) = &config.private_key {
             pk.parse::<LocalWallet>()?.with_chain_id(chain_id)
         } else if let Some(path) = &config.keystore_path {
-            let password = std::env::var("FLASHSTAT__GUARDIAN__PASSWORD")
-                .map_err(|_| eyre!("Keystore configured but FLASHSTAT__GUARDIAN__PASSWORD not set"))?;
+            let password = std::env::var("FLASHSTAT__GUARDIAN__PASSWORD").map_err(|_| {
+                eyre!("Keystore configured but FLASHSTAT__GUARDIAN__PASSWORD not set")
+            })?;
             LocalWallet::decrypt_keystore(path, password)?.with_chain_id(chain_id)
         } else {
             return Err(eyre!("No guardian wallet configured"));

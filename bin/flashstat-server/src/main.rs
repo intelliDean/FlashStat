@@ -1,9 +1,11 @@
 use ethers::types::H256;
 use eyre::Context;
 use flashstat_api::FlashApiServer;
-use flashstat_common::{Config, FlashBlock, ReorgEvent};
+use flashstat_common::{
+    Config, FlashBlock, ReorgEvent, ReorgSeverity, SequencerStats, SystemHealth,
+};
 use flashstat_db::FlashStorage;
-use jsonrpsee::core::{async_trait, RpcResult};
+use jsonrpsee::core::{RpcResult, async_trait};
 use jsonrpsee::server::ServerBuilder;
 use jsonrpsee::types::error::ErrorObjectOwned;
 use std::sync::Arc;
@@ -27,7 +29,8 @@ pub struct FlashServer {
 #[async_trait]
 impl FlashApiServer for FlashServer {
     async fn get_confidence(&self, hash: H256) -> RpcResult<f64> {
-        let block = self.storage
+        let block = self
+            .storage
             .get_block(hash)
             .await
             .map_err(|e| ErrorObjectOwned::owned(-32603, e.to_string(), None::<()>))?;
@@ -59,11 +62,16 @@ impl FlashApiServer for FlashServer {
         self.storage
             .get_latest_reorgs(limit)
             .await
-            .map(|events| events.into_iter().filter(|e| e.severity == flashstat_common::ReorgSeverity::Equivocation).collect())
+            .map(|events| {
+                events
+                    .into_iter()
+                    .filter(|e| e.severity == ReorgSeverity::Equivocation)
+                    .collect()
+            })
             .map_err(|e| ErrorObjectOwned::owned(-32603, e.to_string(), None::<()>))
     }
 
-    async fn get_health(&self) -> RpcResult<flashstat_common::SystemHealth> {
+    async fn get_health(&self) -> RpcResult<SystemHealth> {
         let db_size = std::fs::metadata(&self.db_path)
             .map(|m| m.len())
             .unwrap_or(0);
@@ -76,14 +84,15 @@ impl FlashApiServer for FlashServer {
         })
     }
 
-    async fn get_sequencer_rankings(&self) -> RpcResult<Vec<flashstat_common::SequencerStats>> {
-        let mut stats = self.storage
+    async fn get_sequencer_rankings(&self) -> RpcResult<Vec<SequencerStats>> {
+        let mut stats = self
+            .storage
             .get_all_sequencer_stats()
             .await
             .map_err(|e| ErrorObjectOwned::owned(-32603, e.to_string(), None::<()>))?;
-        
+
         // Sort by score descending
-        stats.sort_by(|a, b| b.reputation_score.cmp(&a.reputation_score));
+        stats.sort_by_key(|s| std::cmp::Reverse(s.reputation_score));
         Ok(stats)
     }
 
@@ -141,10 +150,13 @@ async fn main() -> eyre::Result<()> {
     // 1. Initialize Shutdown Signal
     let (shutdown_tx, _) = broadcast::channel(1);
 
-    // 2. Initialize Monitor (which manages storage)
+    // 2. Initialize Storage
+    let storage = std::sync::Arc::new(flashstat_db::RedbStorage::new(&config.storage.db_path)?);
+
+    // 3. Initialize Monitor
     let mut monitor =
-        flashstat_core::FlashMonitor::new(config.clone(), shutdown_tx.subscribe()).await?;
-    let storage = monitor.storage();
+        flashstat_core::FlashMonitor::new(config.clone(), storage.clone(), shutdown_tx.subscribe())
+            .await?;
     let block_tx = monitor.block_notifier();
     let event_tx = monitor.event_notifier();
 
@@ -157,7 +169,11 @@ async fn main() -> eyre::Result<()> {
 
     // 4. Start JSON-RPC Server with Pub/Sub support
     let server = ServerBuilder::default().build("127.0.0.1:9944").await?;
-    let initial_reorgs = storage.get_latest_reorgs(1000).await.unwrap_or_default().len() as u64;
+    let initial_reorgs = storage
+        .get_latest_reorgs(1000)
+        .await
+        .unwrap_or_default()
+        .len() as u64;
 
     let server_struct = FlashServer {
         storage: storage.clone(),
