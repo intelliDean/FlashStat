@@ -141,12 +141,11 @@ async fn run_app(
             .checked_sub(app.last_tick.elapsed())
             .unwrap_or_default();
 
-        if event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                if handle_key_events(key, &mut app) {
-                    break;
-                }
-            }
+        if event::poll(timeout)?
+            && let Event::Key(key) = event::read()?
+            && handle_key_events(key, &mut app)
+        {
+            break;
         }
 
         if app.last_tick.elapsed() >= tick_rate {

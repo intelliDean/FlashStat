@@ -11,7 +11,7 @@ mod tests {
     use ethers::prelude::*;
     use eyre::Result;
     use flashstat_common::*;
-    use flashstat_db::RedbStorage;
+    use flashstat_db::{FlashStorage, RedbStorage};
     use std::sync::Arc;
     use tempfile::tempdir;
     use tokio::sync::broadcast;
