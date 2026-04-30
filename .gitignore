@@ -3,3 +3,9 @@
 data/
 flashstat.toml
 .env
+.idea
+.vscode
+.next
+.github
+
+simple.md

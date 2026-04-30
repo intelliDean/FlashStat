@@ -418,6 +418,7 @@ pub(crate) fn extract_quote_from_block(block: &Block<H256>) -> Option<Bytes> {
 
 /// Classifies a block-height conflict as either a soft reorg or an equivocation.
 /// Returns the severity and, if applicable, the `EquivocationEvent`.
+#[allow(clippy::collapsible_if)]
 fn classify_reorg(
     prev: &FlashBlock,
     sequencer_signature: &Option<Bytes>,
@@ -606,7 +607,7 @@ fn build_conflict_analysis(
 mod tests {
     use super::*;
     use chrono::Utc;
-    use ethers::types::{Address, Block, BlockNumber, Bytes, H256, Transaction, U256};
+    use ethers::types::{Address, Block, Bytes, Transaction, H256, U256};
     use flashstat_common::{BlockStatus, FlashBlock, ReorgSeverity, SequencerStats};
 
     // ── Fixtures ──────────────────────────────────────────────────────────────

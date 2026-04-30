@@ -24,7 +24,7 @@ impl Fixture {
     async fn new() -> Self {
         let dir = tempdir().unwrap();
         let storage: Arc<dyn FlashStorage> =
-            Arc::new(RedbStorage::new(dir.into_path().join("test.db").to_str().unwrap()).unwrap());
+            Arc::new(RedbStorage::new(dir.path().to_owned().join("test.db").to_str().unwrap()).unwrap());
 
         let config = Config {
             rpc: RpcConfig {
