@@ -5,7 +5,7 @@ use flashstat_common::{
     Config, FlashBlock, ReorgEvent, ReorgSeverity, SequencerStats, SystemHealth,
 };
 use flashstat_db::FlashStorage;
-use jsonrpsee::core::{async_trait, RpcResult};
+use jsonrpsee::core::{RpcResult, async_trait};
 use jsonrpsee::server::ServerBuilder;
 use jsonrpsee::types::error::ErrorObjectOwned;
 use std::sync::Arc;
