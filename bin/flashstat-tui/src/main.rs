@@ -43,46 +43,66 @@ impl App {
         }
     }
 
-    async fn init(&mut self, client: &(impl FlashApiClient + Sync)) -> Result<()> {
-        if let Ok(blocks) = client.get_recent_blocks(50).await {
-            self.blocks = blocks;
-            if let Some(first) = self.blocks.first() {
-                self.latest_confidence = first.confidence;
+    fn update_blocks(&mut self, blocks: Vec<FlashBlock>) {
+        self.blocks = blocks;
+        if let Some(first) = self.blocks.first() {
+            self.latest_confidence = first.confidence;
+        }
+    }
+
+    fn update_latest_block(&mut self, block: FlashBlock) {
+        if self.blocks.first().map(|b| b.hash) != Some(block.hash) {
+            self.latest_confidence = block.confidence;
+            self.blocks.insert(0, block);
+            if self.blocks.len() > 50 {
+                self.blocks.pop();
             }
         }
-        if let Ok(recent_reorgs) = client.get_recent_reorgs(10).await {
+    }
+
+    fn update_sequencers(&mut self, mut sequencers: Vec<SequencerStats>) {
+        sequencers.sort_by_key(|s| std::cmp::Reverse(s.reputation_score));
+        self.sequencers = sequencers;
+    }
+
+    async fn init(&mut self, client: &(impl FlashApiClient + Sync)) -> Result<()> {
+        let (blocks_res, reorgs_res, seq_res) = tokio::join!(
+            client.get_recent_blocks(50),
+            client.get_recent_reorgs(10),
+            client.get_sequencer_rankings()
+        );
+
+        if let Ok(blocks) = blocks_res {
+            self.update_blocks(blocks);
+        }
+        if let Ok(recent_reorgs) = reorgs_res {
             self.reorgs = recent_reorgs;
         }
-        if let Ok(mut sequencers) = client.get_sequencer_rankings().await {
-            sequencers.sort_by_key(|s| std::cmp::Reverse(s.reputation_score));
-            self.sequencers = sequencers;
+        if let Ok(sequencers) = seq_res {
+            self.update_sequencers(sequencers);
         }
         Ok(())
     }
 
     async fn on_tick(&mut self, client: &(impl FlashApiClient + Sync)) -> Result<()> {
-        if let Ok(Some(block)) = client.get_latest_block().await {
-            #[allow(clippy::collapsible_if)]
-            if self.blocks.first().map(|b| b.hash) != Some(block.hash) {
-                self.latest_confidence = block.confidence;
-                self.blocks.insert(0, block);
-                if self.blocks.len() > 50 {
-                    self.blocks.pop();
-                }
-            }
-        }
+        let (block_res, reorgs_res, health_res, seq_res) = tokio::join!(
+            client.get_latest_block(),
+            client.get_recent_reorgs(10),
+            client.get_health(),
+            client.get_sequencer_rankings()
+        );
 
-        if let Ok(recent_reorgs) = client.get_recent_reorgs(10).await {
+        if let Ok(Some(block)) = block_res {
+            self.update_latest_block(block);
+        }
+        if let Ok(recent_reorgs) = reorgs_res {
             self.reorgs = recent_reorgs;
         }
-
-        if let Ok(health) = client.get_health().await {
+        if let Ok(health) = health_res {
             self.health = Some(health);
         }
-
-        if let Ok(mut sequencers) = client.get_sequencer_rankings().await {
-            sequencers.sort_by_key(|s| std::cmp::Reverse(s.reputation_score));
-            self.sequencers = sequencers;
+        if let Ok(sequencers) = seq_res {
+            self.update_sequencers(sequencers);
         }
 
         Ok(())
