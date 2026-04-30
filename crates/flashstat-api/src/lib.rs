@@ -28,7 +28,8 @@ pub trait FlashApi {
     async fn get_sequencer_rankings(&self) -> RpcResult<Vec<flashstat_common::SequencerStats>>;
 
     #[method(name = "ingestBlock")]
-    async fn ingest_block(&self, block: ethers::types::Block<ethers::types::H256>) -> RpcResult<()>;
+    async fn ingest_block(&self, block: ethers::types::Block<ethers::types::H256>)
+    -> RpcResult<()>;
 
     #[subscription(name = "subscribeBlocks", item = FlashBlock)]
     async fn subscribe_blocks(&self) -> jsonrpsee::core::SubscriptionResult;

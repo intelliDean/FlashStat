@@ -13,7 +13,7 @@ use futures_util::StreamExt;
 use std::sync::Arc;
 use std::time::Duration;
 use tee::TeeVerifier;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{Mutex, broadcast};
 use tracing::{error, info, warn};
 
 pub struct FlashMonitor {
