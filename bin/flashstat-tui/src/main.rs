@@ -1,19 +1,19 @@
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use eyre::Result;
 use flashstat_api::FlashApiClient;
 use flashstat_common::{FlashBlock, ReorgEvent, SequencerStats, SystemHealth};
 use jsonrpsee::http_client::HttpClientBuilder;
 use ratatui::{
+    Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph},
-    Frame, Terminal,
 };
 use std::{
     io,
@@ -237,8 +237,11 @@ fn ui(f: &mut Frame, app: &App) {
         })
         .collect();
 
-    let sequencer_list = List::new(sequencers)
-        .block(Block::default().borders(Borders::ALL).title("Sequencer Reputation"));
+    let sequencer_list = List::new(sequencers).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Sequencer Reputation"),
+    );
     f.render_widget(sequencer_list, main_chunks[1]);
 
     // Reorg Log
@@ -291,7 +294,9 @@ fn ui(f: &mut Frame, app: &App) {
         if let Some(eq) = &reorg.equivocation {
             lines.push(Line::from(vec![Span::styled(
                 "Conflict Analysis:",
-                Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
             )]));
 
             if let Some(analysis) = &eq.conflict_analysis {
