@@ -2,8 +2,8 @@ use flashstat_common::{
     BlockStatus, Config, ConflictAnalysis, DoubleSpendProof, EquivocationEvent, FlashBlock,
     ReorgEvent, ReorgSeverity,
 };
-pub mod tee;
 pub mod proof;
+pub mod tee;
 pub mod wallet;
 use chrono::Utc;
 use ethers::prelude::*;
@@ -13,7 +13,7 @@ use futures_util::StreamExt;
 use std::sync::Arc;
 use std::time::Duration;
 use tee::TeeVerifier;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{Mutex, broadcast};
 use tracing::{error, info, warn};
 
 pub struct FlashMonitor {
@@ -29,8 +29,11 @@ pub struct FlashMonitor {
 }
 
 impl FlashMonitor {
-    pub async fn new(config: Config, storage: Arc<dyn FlashStorage>, shutdown_rx: broadcast::Receiver<()>) -> Result<Self> {
-
+    pub async fn new(
+        config: Config,
+        storage: Arc<dyn FlashStorage>,
+        shutdown_rx: broadcast::Receiver<()>,
+    ) -> Result<Self> {
         let sequencer_address: Address = config.tee.sequencer_address;
         let tee_verifier = TeeVerifier::new(sequencer_address);
 
@@ -39,11 +42,14 @@ impl FlashMonitor {
 
         let provider = Arc::new(Provider::<Http>::try_from(&config.rpc.http_url)?);
 
-        let guardian_wallet = if config.guardian.private_key.is_some() || config.guardian.keystore_path.is_some() {
-            Some(Arc::new(wallet::GuardianWallet::new(&config.guardian, &config.rpc.http_url).await?))
-        } else {
-            None
-        };
+        let guardian_wallet =
+            if config.guardian.private_key.is_some() || config.guardian.keystore_path.is_some() {
+                Some(Arc::new(
+                    wallet::GuardianWallet::new(&config.guardian, &config.rpc.http_url).await?,
+                ))
+            } else {
+                None
+            };
 
         Ok(Self {
             config,
@@ -70,7 +76,7 @@ impl FlashMonitor {
         self.storage.clone()
     }
 
-    pub async fn run(&mut self) -> Result<()> {
+    pub async fn run(&self) -> Result<()> {
         info!("🏮 FlashStat Monitor starting with Supervisor pattern");
 
         let mut shutdown_rx = self.shutdown_rx.resubscribe();
@@ -125,6 +131,7 @@ impl FlashMonitor {
                         Ok(num) => {
                             let num_u64 = num.as_u64();
                             if num_u64 > last_polled_block {
+                                #[allow(clippy::collapsible_if)]
                                 if let Ok(Some(block)) = self.provider.get_block(num).await {
                                     if let Err(e) = self.handle_new_block(block).await {
                                         error!("Error processing polled block: {:?}", e);
@@ -143,7 +150,7 @@ impl FlashMonitor {
         Ok(())
     }
 
-    async fn handle_new_block(&self, eth_block: Block<H256>) -> Result<()> {
+    pub async fn handle_new_block(&self, eth_block: Block<H256>) -> Result<()> {
         let hash = eth_block.hash.unwrap_or_default();
         let number: U256 = eth_block.number.unwrap_or_default().as_u64().into();
 
@@ -170,7 +177,6 @@ impl FlashMonitor {
                             number
                         );
 
-                        // Phase 5: Optional TDX Attestation Check
                         if self.config.tee.attestation_enabled {
                             if let Some(quote) = extract_quote_from_block(&eth_block) {
                                 match self.tee_verifier.verify_tdx_attestation(
@@ -183,16 +189,25 @@ impl FlashMonitor {
                                     }
                                     Ok(false) => {
                                         confidence = 45.0;
-                                        warn!("⚠️ TEE Signature valid but Attestation Check FAILED for block #{}", number);
+                                        warn!(
+                                            "⚠️ TEE Signature valid but Attestation Check FAILED for block #{}",
+                                            number
+                                        );
                                     }
                                     Err(e) => {
                                         confidence = 70.0;
-                                        warn!("⚠️ TEE Signature valid but Attestation verification ERROR for block #{}: {:?}", number, e);
+                                        warn!(
+                                            "⚠️ TEE Signature valid but Attestation verification ERROR for block #{}: {:?}",
+                                            number, e
+                                        );
                                     }
                                 }
                             } else {
                                 confidence = 85.0;
-                                warn!("⚠️ Attestation enabled but NO quote found in block #{}", number);
+                                warn!(
+                                    "⚠️ Attestation enabled but NO quote found in block #{}",
+                                    number
+                                );
                             }
                         }
                     } else {
@@ -219,12 +234,16 @@ impl FlashMonitor {
                     let mut equivocation = None;
 
                     // Detect Equivocation: Same block number, different hash, same signer
-                    if let (Some(sig1), Some(sig2), Some(signer1), Some(signer2)) = (
+                    let equivocation_check = (
                         &prev.sequencer_signature,
                         &sequencer_signature,
                         &prev.signer,
                         &signer,
-                    ) {
+                    );
+                    if let (Some(sig1), Some(sig2), Some(signer1), Some(signer2)) =
+                        equivocation_check
+                    {
+                        #[allow(clippy::collapsible_if)]
                         if signer1 == signer2 {
                             severity = ReorgSeverity::Equivocation;
                             equivocation = Some(EquivocationEvent {
@@ -264,7 +283,7 @@ impl FlashMonitor {
                         let old_hash = prev.hash;
                         let new_hash = hash;
                         let block_number = number;
-                        
+
                         tokio::spawn(async move {
                             if let Err(e) =
                                 analyze_and_update_equivocation(storage, provider, event_clone)
@@ -285,8 +304,13 @@ impl FlashMonitor {
                                     new_hash,
                                 );
                                 match wallet.submit_equivocation_proof(proof).await {
-                                    Ok(tx_hash) => info!("🚀 ACTIVE PROTECTION: Slashing proof submitted! TX: {:?}", tx_hash),
-                                    Err(e) => error!("❌ Watchtower FAILED to submit proof: {:?}", e),
+                                    Ok(tx_hash) => info!(
+                                        "🚀 ACTIVE PROTECTION: Slashing proof submitted! TX: {:?}",
+                                        tx_hash
+                                    ),
+                                    Err(e) => {
+                                        error!("❌ Watchtower FAILED to submit proof: {:?}", e)
+                                    }
                                 }
                             }
                         });
@@ -297,8 +321,15 @@ impl FlashMonitor {
 
                     // Update Reputation Penalties
                     if let Some(signer_addr) = signer {
-                        let (soft, equiv) = if severity == ReorgSeverity::Equivocation { (0, 1) } else { (1, 0) };
-                        if let Err(e) = self.update_reputation(signer_addr, 0, soft, equiv, false).await {
+                        let (soft, equiv) = if severity == ReorgSeverity::Equivocation {
+                            (0, 1)
+                        } else {
+                            (1, 0)
+                        };
+                        if let Err(e) = self
+                            .update_reputation(signer_addr, 0, soft, equiv, false)
+                            .await
+                        {
                             error!("Failed to apply reputation penalty: {:?}", e);
                         }
                     }
@@ -328,7 +359,7 @@ impl FlashMonitor {
             hash,
             parent_hash: eth_block.parent_hash,
             timestamp: Utc::now(),
-            sequencer_signature,
+            sequencer_signature: sequencer_signature.clone(),
             signer,
             confidence,
             status: if confidence > 95.0 {
@@ -345,7 +376,7 @@ impl FlashMonitor {
 
         self.storage.save_block(flash_block.clone()).await?;
         let _ = self.block_tx.send(flash_block.clone());
-        
+
         // Update Reputation
         if let Some(signer_addr) = signer {
             let attested = confidence > 95.0; // Phase 5 threshold
@@ -359,12 +390,21 @@ impl FlashMonitor {
         Ok(())
     }
 
-    async fn update_reputation(&self, address: Address, blocks: u64, soft_reorgs: u64, equivocations: u64, attested: bool) -> Result<()> {
-        let mut stats = self.storage.get_sequencer_stats(address).await?.unwrap_or(flashstat_common::SequencerStats {
-            address,
-            last_active: Utc::now(),
-            ..Default::default()
-        });
+    async fn update_reputation(
+        &self,
+        address: Address,
+        blocks: u64,
+        soft_reorgs: u64,
+        equivocations: u64,
+        attested: bool,
+    ) -> Result<()> {
+        let mut stats = self.storage.get_sequencer_stats(address).await?.unwrap_or(
+            flashstat_common::SequencerStats {
+                address,
+                last_active: Utc::now(),
+                ..Default::default()
+            },
+        );
 
         if blocks > 0 {
             stats.total_blocks_signed += blocks;
@@ -383,12 +423,13 @@ impl FlashMonitor {
         stats.last_active = Utc::now();
 
         // Calculate score with Refined Weights
-        let base_score = (stats.total_blocks_signed as i64) * 1;
-        let attestation_bonus = (stats.total_attested_blocks as i64) * 1; // Permanent +1 for each hardware-backed block
+        let base_score = stats.total_blocks_signed as i64;
+        let attestation_bonus = stats.total_attested_blocks as i64; // Permanent +1 for each hardware-backed block
         let streak_bonus = (stats.current_streak / 100) as i64 * 10;
-        
-        let penalty = (stats.total_soft_reorgs as i64 * 50) + (stats.total_equivocations as i64 * 1000);
-        
+
+        let penalty =
+            (stats.total_soft_reorgs as i64 * 50) + (stats.total_equivocations as i64 * 1000);
+
         stats.reputation_score = base_score + attestation_bonus + streak_bonus - penalty;
 
         self.storage.update_sequencer_stats(stats).await?;
@@ -413,7 +454,7 @@ fn extract_signature_from_block(block: &Block<H256>) -> Option<Bytes> {
 /// In Unichain, the quote may be present in extra_data or a custom header.
 fn extract_quote_from_block(block: &Block<H256>) -> Option<Bytes> {
     let extra_data = &block.extra_data;
-    
+
     // OP-Stack extra_data structure: [32-byte zero prefix] [65-byte signature] [optional quote]
     // If the data is longer than 32 + 65, the remainder might be the quote.
     if extra_data.len() > 97 {
@@ -422,13 +463,15 @@ fn extract_quote_from_block(block: &Block<H256>) -> Option<Bytes> {
     } else {
         // Fallback: check if the extra_data itself is an RLP list containing the quote
         let rlp = ethers::utils::rlp::Rlp::new(extra_data);
+        #[allow(clippy::collapsible_if)]
         if rlp.is_list() && rlp.item_count().unwrap_or(0) >= 2 {
-            if let Ok(quote_item) = rlp.at(1) {
-                if let Ok(quote_bytes) = quote_item.as_val::<Vec<u8>>() {
-                    if quote_bytes.len() > 128 {
-                        return Some(Bytes::from(quote_bytes));
-                    }
-                }
+            if let Some(quote_bytes) = rlp
+                .at(1)
+                .ok()
+                .and_then(|item| item.as_val::<Vec<u8>>().ok())
+                .filter(|b| b.len() > 128)
+            {
+                return Some(Bytes::from(quote_bytes));
             }
         }
         None
@@ -501,29 +544,42 @@ async fn analyze_and_update_equivocation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flashstat_common::*;
     use flashstat_db::RedbStorage;
     use tempfile::tempdir;
-    use flashstat_common::*;
 
     #[tokio::test]
     async fn test_reputation_scoring() -> Result<()> {
         let dir = tempdir()?;
         let db_path = dir.path().join("test.db");
         let storage = Arc::new(RedbStorage::new(db_path.to_str().unwrap())?);
-        
+
         // Mock config
         let config = Config {
-            rpc: RpcConfig { ws_url: "http://localhost:8545".into(), http_url: "http://localhost:8545".into() },
-            storage: StorageConfig { db_path: db_path.to_str().unwrap().into() },
-            tee: TeeConfig { sequencer_address: Address::random(), attestation_enabled: false, expected_mrenclave: None },
-            guardian: GuardianConfig { private_key: None, keystore_path: None, slashing_contract: Address::random() },
+            rpc: RpcConfig {
+                ws_url: "http://localhost:8545".into(),
+                http_url: "http://localhost:8545".into(),
+            },
+            storage: StorageConfig {
+                db_path: db_path.to_str().unwrap().into(),
+            },
+            tee: TeeConfig {
+                sequencer_address: Address::random(),
+                attestation_enabled: false,
+                expected_mrenclave: None,
+            },
+            guardian: GuardianConfig {
+                private_key: None,
+                keystore_path: None,
+                slashing_contract: Address::random(),
+            },
         };
 
         let (_tx, rx) = broadcast::channel(1);
         let monitor = FlashMonitor::new(config, storage.clone(), rx).await?;
-        
+
         let address = Address::random();
-        
+
         // 1. Reward: 100 blocks + attested
         monitor.update_reputation(address, 100, 0, 0, true).await?;
         let stats = storage.get_sequencer_stats(address).await?.unwrap();

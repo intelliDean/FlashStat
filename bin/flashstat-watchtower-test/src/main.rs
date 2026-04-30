@@ -1,70 +1,62 @@
-use ethers::types::{Address, Block, H256, U256, Bytes};
-use flashstat_common::{Config, RpcConfig, StorageConfig, TeeConfig, GuardianConfig};
-use flashstat_core::FlashMonitor;
+use ethers::types::{Block, H256, U256};
 use eyre::Result;
-use tokio::sync::broadcast;
-use std::sync::Arc;
+use jsonrpsee::core::client::ClientT;
+use jsonrpsee::http_client::HttpClientBuilder;
+use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("🏮 Starting Phase 7 Watchtower Integration Test...");
 
-    // 1. Setup Mock Config
-    let config = Config {
-        rpc: RpcConfig {
-            ws_url: "ws://localhost:8545".to_string(), // Mock
-            http_url: "http://localhost:8545".to_string(), // Mock
-        },
-        storage: StorageConfig {
-            db_path: "./data/test_watchtower_db".to_string(),
-        },
-        tee: TeeConfig {
-            sequencer_address: Address::random(),
-            attestation_enabled: false,
-            expected_mrenclave: None,
-        },
-        guardian: GuardianConfig {
-            private_key: Some("0x0123456789012345678901234567890123456789012345678901234567890123".to_string()),
-            keystore_path: None,
-            slashing_contract: Address::random(),
-        },
-    };
+    let client = HttpClientBuilder::default().build("http://127.0.0.1:9944")?;
 
-    // 2. Initialize Monitor
-    let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
-    let monitor = FlashMonitor::new(config, shutdown_rx).await?;
+    // 1. Setup Mock Data
+    let block_number = 99_999u64;
 
-    println!("✅ Monitor Initialized with Guardian Wallet");
+    // Create two conflicting blocks signed by the same "sequencer"
+    let hash_a = H256::random();
+    let hash_b = H256::random();
 
-    // 3. Mock Blocks
-    let block_number = 100u64;
-    let signer = Address::random();
-    
-    // Block A
-    let mut block_a: Block<H256> = Block::default();
-    block_a.number = Some(block_number.into());
-    block_a.hash = Some(H256::random());
-    // In a real scenario, we'd need a real signature, but our mock extraction 
-    // will just take the last 65 bytes of extra_data.
-    block_a.extra_data = Bytes::from(vec![0u8; 100]); // Mock sig padding
+    let mut block_a = create_mock_block(block_number, hash_a);
+    // Sig 1 (Mocked as 65 bytes at end of extra_data)
+    let mut extra_a = vec![0u8; 32];
+    extra_a.extend_from_slice(&[0x11; 65]);
+    block_a.extra_data = extra_a.into();
 
-    // Block B (Conflicting)
-    let mut block_b: Block<H256> = Block::default();
-    block_b.number = Some(block_number.into());
-    block_b.hash = Some(H256::random());
-    block_b.extra_data = Bytes::from(vec![1u8; 100]); // Different mock sig padding
+    let mut block_b = create_mock_block(block_number, hash_b);
+    // Sig 2 (Conflicting)
+    let mut extra_b = vec![0u8; 32];
+    extra_b.extend_from_slice(&[0x22; 65]);
+    block_b.extra_data = extra_b.into();
 
-    println!("⚔️ Feeding Conflicting Blocks to Monitor...");
-    
-    // We access handle_new_block directly for the test
-    // Note: In a real test we'd use reflection or make it pub(crate)
-    // Since I am the author, I'll make it pub for this test tool.
-    
-    // monitor.handle_new_block(block_a).await?;
-    // monitor.handle_new_block(block_b).await?;
+    println!("⚔️  Injecting conflicting blocks at #{}...", block_number);
 
-    println!("⚠️ Manual Test: Please run 'cargo test' or check server logs during simulation.");
-    println!("💡 Since handle_new_block is private, I will update flashstat-simulate to use the Public RPC API once we implement the Ingest endpoint.");
-    
+    // 2. Ingest Block A
+    let _: () = client.request("flash_ingestBlock", (block_a,)).await?;
+    println!("  ✅ Block A Ingested");
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // 3. Ingest Block B (Should trigger equivocation detection and watchtower)
+    let _: () = client.request("flash_ingestBlock", (block_b,)).await?;
+    println!("  🔥 Block B Ingested (Equivocation Triggered)");
+
+    println!("🔎 Monitoring server logs for 'ACTIVE PROTECTION' or 'Slashing proof submitted'...");
+
+    // Give it a moment to process the async task
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    println!("✅ Integration test signal sent. Verify on-chain/log output.");
+
     Ok(())
+}
+
+fn create_mock_block(number: u64, hash: H256) -> Block<H256> {
+    Block {
+        number: Some(number.into()),
+        hash: Some(hash),
+        parent_hash: H256::random(),
+        timestamp: U256::from(chrono::Utc::now().timestamp()),
+        ..Default::default()
+    }
 }

@@ -28,8 +28,11 @@ async fn main() -> Result<()> {
         let _ = shutdown_tx_signal.send(());
     });
 
-    // 5. Run Monitor
-    let mut monitor = FlashMonitor::new(config, shutdown_tx.subscribe()).await?;
+    // 5. Initialize Storage
+    let storage = std::sync::Arc::new(flashstat_db::RedbStorage::new(&config.storage.db_path)?);
+
+    // 6. Run Monitor
+    let monitor = FlashMonitor::new(config, storage, shutdown_tx.subscribe()).await?;
 
     if let Err(e) = monitor.run().await {
         error!("Fatal monitor error: {:?}", e);

@@ -1,0 +1,11 @@
+[package]
+name = "flashstat-watchtower-test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { workspace = true }
+ethers = { workspace = true }
+eyre = { workspace = true }
+jsonrpsee = { workspace = true }
+chrono = { workspace = true }
