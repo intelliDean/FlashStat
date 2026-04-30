@@ -1,18 +1,17 @@
-use ethers::types::{Address, Block, Bytes, H256, U256};
+use ethers::types::{Block, H256, U256};
 use eyre::Result;
-use jsonrpsee::http_client::HttpClientBuilder;
 use jsonrpsee::core::client::ClientT;
+use jsonrpsee::http_client::HttpClientBuilder;
 use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("🏮 Starting Phase 7 Watchtower Integration Test...");
-    
+
     let client = HttpClientBuilder::default().build("http://127.0.0.1:9944")?;
 
     // 1. Setup Mock Data
     let block_number = 99_999u64;
-    let signer = Address::random();
 
     // Create two conflicting blocks signed by the same "sequencer"
     let hash_a = H256::random();
@@ -43,7 +42,7 @@ async fn main() -> Result<()> {
     println!("  🔥 Block B Ingested (Equivocation Triggered)");
 
     println!("🔎 Monitoring server logs for 'ACTIVE PROTECTION' or 'Slashing proof submitted'...");
-    
+
     // Give it a moment to process the async task
     tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -53,10 +52,11 @@ async fn main() -> Result<()> {
 }
 
 fn create_mock_block(number: u64, hash: H256) -> Block<H256> {
-    let mut block = Block::default();
-    block.number = Some(number.into());
-    block.hash = Some(hash);
-    block.parent_hash = H256::random();
-    block.timestamp = U256::from(chrono::Utc::now().timestamp());
-    block
+    Block {
+        number: Some(number.into()),
+        hash: Some(hash),
+        parent_hash: H256::random(),
+        timestamp: U256::from(chrono::Utc::now().timestamp()),
+        ..Default::default()
+    }
 }

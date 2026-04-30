@@ -1,8 +1,8 @@
 use clap::Parser;
-use ethers::types::{Address, Block, H256, Transaction, U256};
+use ethers::types::{Block, H256, U256};
 use eyre::Result;
-use jsonrpsee::http_client::HttpClientBuilder;
 use jsonrpsee::core::client::ClientT;
+use jsonrpsee::http_client::HttpClientBuilder;
 use std::time::Duration;
 
 #[derive(Parser, Debug)]
@@ -53,7 +53,6 @@ async fn main() -> Result<()> {
             let _: () = client.request("flash_ingestBlock", (block_1,)).await?;
             tokio::time::sleep(Duration::from_millis(500)).await;
             let _: () = client.request("flash_ingestBlock", (block_2,)).await?;
-
         } else {
             println!("📦 Simulating Standard Block #{}", block_number);
             let block = create_mock_block(block_number, hash_1);
@@ -68,18 +67,11 @@ async fn main() -> Result<()> {
 }
 
 fn create_mock_block(number: u64, hash: H256) -> Block<H256> {
-    let mut block = Block::default();
-    block.number = Some(number.into());
-    block.hash = Some(hash);
-    block.parent_hash = H256::random();
-    block.timestamp = U256::from(chrono::Utc::now().timestamp());
-    
-    // Add some mock transactions if needed
-    let mut tx = Transaction::default();
-    tx.hash = H256::random();
-    tx.from = Address::random();
-    tx.nonce = U256::from(0);
-    // block.transactions.push(tx); // Block<H256> only has hashes by default
-
-    block
+    Block {
+        number: Some(number.into()),
+        hash: Some(hash),
+        parent_hash: H256::random(),
+        timestamp: U256::from(chrono::Utc::now().timestamp()),
+        ..Default::default()
+    }
 }

@@ -97,7 +97,10 @@ impl FlashApiServer for FlashServer {
         Ok(stats)
     }
 
-    async fn ingest_block(&self, block: ethers::types::Block<ethers::types::H256>) -> RpcResult<()> {
+    async fn ingest_block(
+        &self,
+        block: ethers::types::Block<ethers::types::H256>,
+    ) -> RpcResult<()> {
         self.monitor
             .handle_new_block(block)
             .await
