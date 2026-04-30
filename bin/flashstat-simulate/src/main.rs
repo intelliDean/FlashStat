@@ -18,6 +18,45 @@ struct Args {
     severity: String,
 }
 
+async fn simulate_equivocation(
+    client: &jsonrpsee::http_client::HttpClient,
+    block_number: u64,
+    hash_1: H256,
+    hash_2: H256,
+) -> Result<()> {
+    println!("⚔️  Simulating Equivocation at block #{}", block_number);
+
+    // Block 1
+    let mut block_1 = create_mock_block(block_number, hash_1);
+    let mut extra_1 = vec![0u8; 32];
+    extra_1.extend_from_slice(&[1u8; 65]);
+    block_1.extra_data = extra_1.into();
+
+    // Block 2 (conflicting)
+    let mut block_2 = create_mock_block(block_number, hash_2);
+    let mut extra_2 = vec![0u8; 32];
+    extra_2.extend_from_slice(&[2u8; 65]);
+    block_2.extra_data = extra_2.into();
+
+    // Ingest both
+    let _: () = client.request("flash_ingestBlock", (block_1,)).await?;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let _: () = client.request("flash_ingestBlock", (block_2,)).await?;
+
+    Ok(())
+}
+
+async fn simulate_standard_block(
+    client: &jsonrpsee::http_client::HttpClient,
+    block_number: u64,
+    hash: H256,
+) -> Result<()> {
+    println!("📦 Simulating Standard Block #{}", block_number);
+    let block = create_mock_block(block_number, hash);
+    let _: () = client.request("flash_ingestBlock", (block,)).await?;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -31,32 +70,12 @@ async fn main() -> Result<()> {
     for i in 0..args.count {
         let block_number = 60_000_000 + i as u64;
         let hash_1 = H256::random();
-        let hash_2 = H256::random();
 
         if args.severity == "equivocation" {
-            println!("⚔️  Simulating Equivocation at block #{}", block_number);
-
-            // Block 1
-            let mut block_1 = create_mock_block(block_number, hash_1);
-            // Mock signature in extra_data (last 65 bytes)
-            let mut extra_1 = vec![0u8; 32];
-            extra_1.extend_from_slice(&[1u8; 65]);
-            block_1.extra_data = extra_1.into();
-
-            // Block 2 (conflicting)
-            let mut block_2 = create_mock_block(block_number, hash_2);
-            let mut extra_2 = vec![0u8; 32];
-            extra_2.extend_from_slice(&[2u8; 65]);
-            block_2.extra_data = extra_2.into();
-
-            // Ingest both
-            let _: () = client.request("flash_ingestBlock", (block_1,)).await?;
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            let _: () = client.request("flash_ingestBlock", (block_2,)).await?;
+            let hash_2 = H256::random();
+            simulate_equivocation(&client, block_number, hash_1, hash_2).await?;
         } else {
-            println!("📦 Simulating Standard Block #{}", block_number);
-            let block = create_mock_block(block_number, hash_1);
-            let _: () = client.request("flash_ingestBlock", (block,)).await?;
+            simulate_standard_block(&client, block_number, hash_1).await?;
         }
 
         tokio::time::sleep(Duration::from_millis(1000)).await;
