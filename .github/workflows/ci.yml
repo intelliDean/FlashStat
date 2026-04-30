@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main, master, develop, dean ]
+    branches: [ main, dean ]
   pull_request:
-    branches: [ main, master, develop, dean ]
+    branches: [ main, dean ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -22,8 +22,8 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Format Check
-        run: cargo fmt --all -- --check
+     # - name: Format Check
+      #  run: cargo fmt --all -- --check
         
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings

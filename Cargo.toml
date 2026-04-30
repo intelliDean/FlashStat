@@ -5,6 +5,7 @@ members = [
     "bin/flashstat-server",
     "bin/flashstat-tui",
     "bin/flashstat-simulate",
+    "bin/flashstat-watchtower-test",
     "crates/flashstat-core",
     "crates/flashstat-api",
     "crates/flashstat-db",

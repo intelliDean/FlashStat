@@ -1,17 +1,15 @@
 use clap::Parser;
-use ethers::types::{Address, Bytes, H256, U256};
+use ethers::types::{Block, H256, U256};
 use eyre::Result;
-use flashstat_common::{
-    ConflictAnalysis, DoubleSpendProof, EquivocationEvent, ReorgEvent, ReorgSeverity,
-};
-use flashstat_db::{FlashStorage, RedbStorage};
-use std::sync::Arc;
+use jsonrpsee::core::client::ClientT;
+use jsonrpsee::http_client::HttpClientBuilder;
+use std::time::Duration;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "🏮 FlashStat Forensic Simulation Tool", long_about = None)]
 struct Args {
-    #[arg(short, long, default_value = "flashstat.db")]
-    db_path: String,
+    #[arg(short, long, default_value = "http://127.0.0.1:9944")]
+    url: String,
 
     #[arg(short, long, default_value_t = 1)]
     count: usize,
@@ -23,65 +21,57 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    let storage: Arc<dyn FlashStorage> = Arc::new(RedbStorage::new(&args.db_path)?);
+    let client = HttpClientBuilder::default().build(&args.url)?;
 
     println!(
-        "🏮 Injecting {} synthetic {} events into {}...",
-        args.count, args.severity, args.db_path
+        "🏮 Simulating {} {} event(s) via RPC at {}...",
+        args.count, args.severity, args.url
     );
 
     for i in 0..args.count {
-        let block_number = 50_000_000 + i as u64;
-        let severity = match args.severity.as_str() {
-            "soft" => ReorgSeverity::Soft,
-            "deep" => ReorgSeverity::Deep,
-            _ => ReorgSeverity::Equivocation,
-        };
+        let block_number = 60_000_000 + i as u64;
+        let hash_1 = H256::random();
+        let hash_2 = H256::random();
 
-        let event = if severity == ReorgSeverity::Equivocation {
-            // Create a detailed equivocation with double-spend data
-            let ds_tx = DoubleSpendProof {
-                tx_hash_1: H256::random(),
-                tx_hash_2: H256::random(),
-                sender: Address::random(),
-                nonce: U256::from(1),
-            };
+        if args.severity == "equivocation" {
+            println!("⚔️  Simulating Equivocation at block #{}", block_number);
 
-            let conflict = ConflictAnalysis {
-                dropped_txs: vec![H256::random(), H256::random()],
-                double_spend_txs: vec![ds_tx],
-            };
+            // Block 1
+            let mut block_1 = create_mock_block(block_number, hash_1);
+            // Mock signature in extra_data (last 65 bytes)
+            let mut extra_1 = vec![0u8; 32];
+            extra_1.extend_from_slice(&[1u8; 65]);
+            block_1.extra_data = extra_1.into();
 
-            let equivocation = EquivocationEvent {
-                signer: Address::random(),
-                signature_1: Bytes::from(vec![1, 2, 3]),
-                signature_2: Bytes::from(vec![4, 5, 6]),
-                conflict_analysis: Some(conflict),
-            };
+            // Block 2 (conflicting)
+            let mut block_2 = create_mock_block(block_number, hash_2);
+            let mut extra_2 = vec![0u8; 32];
+            extra_2.extend_from_slice(&[2u8; 65]);
+            block_2.extra_data = extra_2.into();
 
-            ReorgEvent {
-                block_number: U256::from(block_number),
-                old_hash: H256::random(),
-                new_hash: H256::random(),
-                detected_at: chrono::Utc::now(),
-                severity,
-                equivocation: Some(equivocation),
-            }
+            // Ingest both
+            let _: () = client.request("flash_ingestBlock", (block_1,)).await?;
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            let _: () = client.request("flash_ingestBlock", (block_2,)).await?;
         } else {
-            ReorgEvent {
-                block_number: U256::from(block_number),
-                old_hash: H256::random(),
-                new_hash: H256::random(),
-                detected_at: chrono::Utc::now(),
-                severity,
-                equivocation: None,
-            }
-        };
+            println!("📦 Simulating Standard Block #{}", block_number);
+            let block = create_mock_block(block_number, hash_1);
+            let _: () = client.request("flash_ingestBlock", (block,)).await?;
+        }
 
-        storage.save_reorg(event).await?;
-        println!("  ✅ Injected alert at block #{}", block_number);
+        tokio::time::sleep(Duration::from_millis(1000)).await;
     }
 
-    println!("🎉 Done!");
+    println!("🎉 Simulation complete!");
     Ok(())
+}
+
+fn create_mock_block(number: u64, hash: H256) -> Block<H256> {
+    Block {
+        number: Some(number.into()),
+        hash: Some(hash),
+        parent_hash: H256::random(),
+        timestamp: U256::from(chrono::Utc::now().timestamp()),
+        ..Default::default()
+    }
 }

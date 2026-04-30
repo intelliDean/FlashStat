@@ -76,7 +76,7 @@ impl FlashMonitor {
         self.storage.clone()
     }
 
-    pub async fn run(&mut self) -> Result<()> {
+    pub async fn run(&self) -> Result<()> {
         info!("🏮 FlashStat Monitor starting with Supervisor pattern");
 
         let mut shutdown_rx = self.shutdown_rx.resubscribe();
@@ -150,7 +150,7 @@ impl FlashMonitor {
         Ok(())
     }
 
-    async fn handle_new_block(&self, eth_block: Block<H256>) -> Result<()> {
+    pub async fn handle_new_block(&self, eth_block: Block<H256>) -> Result<()> {
         let hash = eth_block.hash.unwrap_or_default();
         let number: U256 = eth_block.number.unwrap_or_default().as_u64().into();
 
