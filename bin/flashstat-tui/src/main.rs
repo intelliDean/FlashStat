@@ -5,7 +5,7 @@ use crossterm::{
 };
 use eyre::Result;
 use flashstat_api::FlashApiClient;
-use flashstat_common::{FlashBlock, ReorgEvent, SystemHealth};
+use flashstat_common::{FlashBlock, ReorgEvent, SequencerStats, SystemHealth};
 use jsonrpsee::http_client::HttpClientBuilder;
 use ratatui::{
     backend::CrosstermBackend,
@@ -27,7 +27,7 @@ struct App {
     latest_confidence: f64,
     last_tick: Instant,
     selected_reorg: usize,
-    sequencers: Vec<flashstat_common::SequencerStats>,
+    sequencers: Vec<SequencerStats>,
 }
 
 impl App {
@@ -212,7 +212,8 @@ fn ui(f: &mut Frame, app: &App) {
         })
         .collect();
 
-    let block_list = List::new(blocks).block(Block::default().borders(Borders::ALL).title("Live Block Feed"));
+    let block_list =
+        List::new(blocks).block(Block::default().borders(Borders::ALL).title("Live Block Feed"));
     f.render_widget(block_list, main_chunks[0]);
 
     // Sequencer Reputation
@@ -220,7 +221,11 @@ fn ui(f: &mut Frame, app: &App) {
         .sequencers
         .iter()
         .map(|s| {
-            let score_color = if s.reputation_score >= 0 { Color::Green } else { Color::Red };
+            let score_color = if s.reputation_score >= 0 {
+                Color::Green
+            } else {
+                Color::Red
+            };
             let content = vec![Line::from(vec![
                 Span::styled(format!("{:.4}… ", s.address), Style::default().fg(Color::Gray)),
                 Span::styled(
@@ -232,8 +237,8 @@ fn ui(f: &mut Frame, app: &App) {
         })
         .collect();
 
-    let sequencer_list =
-        List::new(sequencers).block(Block::default().borders(Borders::ALL).title("Sequencer Reputation"));
+    let sequencer_list = List::new(sequencers)
+        .block(Block::default().borders(Borders::ALL).title("Sequencer Reputation"));
     f.render_widget(sequencer_list, main_chunks[1]);
 
     // Reorg Log
@@ -246,9 +251,9 @@ fn ui(f: &mut Frame, app: &App) {
                 flashstat_common::ReorgSeverity::Deep => {
                     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
                 }
-                flashstat_common::ReorgSeverity::Equivocation => Style::default()
-                    .fg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
+                flashstat_common::ReorgSeverity::Equivocation => {
+                    Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)
+                }
             };
 
             let content = vec![Line::from(vec![
@@ -286,9 +291,7 @@ fn ui(f: &mut Frame, app: &App) {
         if let Some(eq) = &reorg.equivocation {
             lines.push(Line::from(vec![Span::styled(
                 "Conflict Analysis:",
-                Style::default()
-                    .fg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
             )]));
 
             if let Some(analysis) = &eq.conflict_analysis {

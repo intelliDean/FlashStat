@@ -1,7 +1,7 @@
 use ethers::types::H256;
 use eyre::Context;
 use flashstat_api::FlashApiServer;
-use flashstat_common::{Config, FlashBlock, ReorgEvent};
+use flashstat_common::{Config, FlashBlock, ReorgEvent, ReorgSeverity, SequencerStats, SystemHealth};
 use flashstat_db::FlashStorage;
 use jsonrpsee::core::{async_trait, RpcResult};
 use jsonrpsee::server::ServerBuilder;
@@ -63,18 +63,18 @@ impl FlashApiServer for FlashServer {
             .map(|events| {
                 events
                     .into_iter()
-                    .filter(|e| e.severity == flashstat_common::ReorgSeverity::Equivocation)
+                    .filter(|e| e.severity == ReorgSeverity::Equivocation)
                     .collect()
             })
             .map_err(|e| ErrorObjectOwned::owned(-32603, e.to_string(), None::<()>))
     }
 
-    async fn get_health(&self) -> RpcResult<flashstat_common::SystemHealth> {
+    async fn get_health(&self) -> RpcResult<SystemHealth> {
         let db_size = std::fs::metadata(&self.db_path)
             .map(|m| m.len())
             .unwrap_or(0);
 
-        Ok(flashstat_common::SystemHealth {
+        Ok(SystemHealth {
             uptime_secs: self.start_time.elapsed().as_secs(),
             total_blocks: self.total_blocks.load(Ordering::Relaxed),
             total_reorgs: self.total_reorgs.load(Ordering::Relaxed),
@@ -82,7 +82,7 @@ impl FlashApiServer for FlashServer {
         })
     }
 
-    async fn get_sequencer_rankings(&self) -> RpcResult<Vec<flashstat_common::SequencerStats>> {
+    async fn get_sequencer_rankings(&self) -> RpcResult<Vec<SequencerStats>> {
         let mut stats = self
             .storage
             .get_all_sequencer_stats()
