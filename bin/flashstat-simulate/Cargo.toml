@@ -13,3 +13,4 @@ chrono = { workspace = true }
 flashstat-common = { path = "../../crates/flashstat-common" }
 flashstat-db = { path = "../../crates/flashstat-db" }
 clap = { version = "4", features = ["derive"] }
+jsonrpsee = { workspace = true }

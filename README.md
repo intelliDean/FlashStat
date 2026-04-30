@@ -1,15 +1,16 @@
 # 🏮 FlashStat
 **The Transparency Layer for Unichain Soft-Finality**
 
-FlashStat provides real-time cryptographic confidence scores for Unichain's 200ms Flashblocks. It monitors the sequencer for equivocations (soft-reorgs) and provides an Ethereum-compatible JSON-RPC interface for wallets and DApps.
+FlashStat provides real-time cryptographic confidence scores for Unichain's 200ms Flashblocks. It monitors the sequencer for equivocations (soft-reorgs) and provides an Ethereum-compatible JSON-RPC interface with active fraud proof protection (Watchtower).
 
 ## 🏗 Architecture
 FlashStat is built as a high-performance Rust monorepo:
 
-- **`bin/flashstat`**: The primary indexing engine. Subscribes to 200ms Flashblocks via WebSockets.
-- **`bin/flashstat-server`**: JSON-RPC server providing confidence metrics.
-- **`crates/flashstat-core`**: Core monitoring and reorg detection logic.
-- **`crates/flashstat-db`**: Ultra-low latency persistence layer using redb (pure-Rust).
+- **`bin/flashstat-server`**: Main entry point. Runs the JSON-RPC server and the indexing engine.
+- **`bin/flashstat-tui`**: Terminal UI Dashboard for real-time monitoring and forensics.
+- **`bin/flashstat-simulate`**: Forensic simulation tool for testing detection and slashing.
+- **`crates/flashstat-core`**: Core monitoring, TEE verification, and reorg detection logic.
+- **`crates/flashstat-db`**: Ultra-low latency persistence layer using `redb`.
 - **`crates/flashstat-api`**: Type-safe JSON-RPC interface definitions.
 
 ## 🚀 Getting Started
@@ -21,37 +22,39 @@ FlashStat is built as a high-performance Rust monorepo:
 Edit `flashstat.toml` or set environment variables:
 ```toml
 [rpc]
-ws_url = "wss://sepolia.unichain.org"
-http_url = "https://sepolia.unichain.org"
+ws_url = "wss://unichain-sepolia..."
+http_url = "https://unichain-sepolia..."
 
-[storage]
-db_path = "./data/flashstat_db"
+[guardian]
+private_key = "0x..." # Or set FLASHSTAT__GUARDIAN__PRIVATE_KEY
+slashing_contract = "0x..."
 ```
 
-### Running the Monitor
-```bash
-cargo run -p flashstat
-```
+### Running the System
+1. **Start the Monitor & Server**:
+   ```bash
+   cargo run -p flashstat-server
+   ```
 
-### Running the API Server
-```bash
-cargo run -p flashstat-server
-```
+2. **Launch the Dashboard**:
+   ```bash
+   cargo run -p flashstat-tui
+   ```
 
 ## 📡 JSON-RPC API
 The API server runs by default on `127.0.0.1:9944`.
 
-### `flash_getConfidence`
-Returns the cryptographic confidence score for a given block hash.
-```bash
-curl -X POST -H "Content-Type: application/json" --data '{"jsonrpc":"2.0","method":"flash_getConfidence","params":["0x..."],"id":1}' http://localhost:9944
-```
+### Key Methods
+- `flash_getConfidence`: Returns confidence score for a hash.
+- `flash_getLatestBlock`: Returns the most recent processed block.
+- `flash_getSequencerRankings`: Returns reputation stats for all sequencers.
+- `flash_ingestBlock`: Manually submit a block for analysis (useful for external indexers).
 
-## 🛡 Security & Trust
-FlashStat calculates confidence based on:
-1. **Persistence**: Number of consecutive sub-blocks seen for a hash.
-2. **TEE Validity**: Verification of the Intel TDX sequencer signature (In Progress).
-3. **Equivocation Checks**: Detection of conflicting TEE signatures for the same slot.
+## 🛡 Security & Active Protection
+FlashStat doesn't just watch; it protects.
+- **TEE Attestation**: Verifies Intel TDX quotes for every sequencer signature.
+- **Reputation Scoring**: Tracks sequencer performance and reset streaks on reorgs.
+- **Active Watchtower**: Automatically submits fraud proofs to the `SlashingManager` contract upon detecting equivocation.
 
 ---
 Built with 🦀 by One Block Org.

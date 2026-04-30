@@ -24,6 +24,7 @@ pub struct FlashServer {
     total_blocks: Arc<AtomicU64>,
     total_reorgs: Arc<AtomicU64>,
     db_path: String,
+    monitor: Arc<flashstat_core::FlashMonitor>,
 }
 
 #[async_trait]
@@ -96,6 +97,13 @@ impl FlashApiServer for FlashServer {
         Ok(stats)
     }
 
+    async fn ingest_block(&self, block: ethers::types::Block<ethers::types::H256>) -> RpcResult<()> {
+        self.monitor
+            .handle_new_block(block)
+            .await
+            .map_err(|e| ErrorObjectOwned::owned(-32603, e.to_string(), None::<()>))
+    }
+
     async fn subscribe_blocks(
         &self,
         pending: jsonrpsee::PendingSubscriptionSink,
@@ -154,15 +162,17 @@ async fn main() -> eyre::Result<()> {
     let storage = std::sync::Arc::new(flashstat_db::RedbStorage::new(&config.storage.db_path)?);
 
     // 3. Initialize Monitor
-    let mut monitor =
+    let monitor = Arc::new(
         flashstat_core::FlashMonitor::new(config.clone(), storage.clone(), shutdown_tx.subscribe())
-            .await?;
+            .await?,
+    );
     let block_tx = monitor.block_notifier();
     let event_tx = monitor.event_notifier();
 
     // 3. Start Monitor in background
+    let monitor_clone = monitor.clone();
     tokio::spawn(async move {
-        if let Err(e) = monitor.run().await {
+        if let Err(e) = monitor_clone.run().await {
             tracing::error!("Monitor error: {:?}", e);
         }
     });
@@ -183,6 +193,7 @@ async fn main() -> eyre::Result<()> {
         total_blocks: Arc::new(AtomicU64::new(0)),
         total_reorgs: Arc::new(AtomicU64::new(initial_reorgs)),
         db_path: config.storage.db_path.clone(),
+        monitor: monitor.clone(),
     };
 
     // Stats listeners

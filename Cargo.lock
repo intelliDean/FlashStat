@@ -1370,7 +1370,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -1413,6 +1412,7 @@ dependencies = [
  "eyre",
  "flashstat-common",
  "flashstat-db",
+ "jsonrpsee",
  "serde",
  "serde_json",
  "tokio",
@@ -1431,6 +1431,17 @@ dependencies = [
  "futures-util",
  "jsonrpsee",
  "ratatui",
+ "tokio",
+]
+
+[[package]]
+name = "flashstat-watchtower-test"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "ethers",
+ "eyre",
+ "jsonrpsee",
  "tokio",
 ]
 
