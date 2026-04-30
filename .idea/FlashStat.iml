@@ -11,6 +11,7 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/flashstat-core/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/flashstat-db/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/bin/flashstat-watchtower-test/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/bin/flashstat-watchtower-test/tests" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

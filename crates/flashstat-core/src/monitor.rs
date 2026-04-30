@@ -4,10 +4,11 @@ use ethers::prelude::*;
 use eyre::Result;
 use flashstat_common::{
     BlockStatus, Config, ConflictAnalysis, DoubleSpendProof, EquivocationEvent, FlashBlock,
-    ReorgEvent, ReorgSeverity,
+    ReorgEvent, ReorgSeverity, SequencerStats,
 };
 use flashstat_db::FlashStorage;
 use futures_util::StreamExt;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, broadcast};
@@ -151,82 +152,90 @@ impl FlashMonitor {
         }
     }
 
+    /// Verifies the TEE sequencer signature embedded in the block's extra_data.
+    /// Returns `(tee_valid, confidence, signer, sequencer_signature)`.
     fn verify_tee_signature(
         &self,
         eth_block: &Block<H256>,
         hash: H256,
         number: U256,
     ) -> (bool, f64, Option<Address>, Option<Bytes>) {
-        let mut tee_valid = false;
-        let mut confidence = 0.0;
-        let mut signer = None;
-        let mut sequencer_signature = None;
+        let Some(sig_bytes) = extract_signature_from_block(eth_block) else {
+            return (false, 0.0, None, None);
+        };
 
-        if let Some(sig_bytes) = extract_signature_from_block(eth_block) {
-            match self.tee_verifier.recover_signer(hash, &sig_bytes) {
-                Ok(recovered_signer) => {
-                    signer = Some(recovered_signer);
-                    tee_valid = recovered_signer == self.tee_verifier.expected_sequencer;
-                    sequencer_signature = Some(sig_bytes);
+        match self.tee_verifier.recover_signer(hash, &sig_bytes) {
+            Ok(recovered_signer) => {
+                let tee_valid = recovered_signer == self.tee_verifier.expected_sequencer;
 
-                    if tee_valid {
-                        confidence = 90.0;
-                        info!(
-                            "🛡️ TEE Signature Verified for block #{} by expected sequencer",
-                            number
-                        );
-
-                        if self.config.tee.attestation_enabled {
-                            if let Some(quote) = extract_quote_from_block(eth_block) {
-                                match self.tee_verifier.verify_tdx_attestation(
-                                    &quote,
-                                    self.config.tee.expected_mrenclave.as_deref(),
-                                ) {
-                                    Ok(true) => {
-                                        confidence = 99.0;
-                                        info!("🛡️ TDX Attestation Verified for block #{}", number);
-                                    }
-                                    Ok(false) => {
-                                        confidence = 45.0;
-                                        warn!(
-                                            "⚠️ TEE Signature valid but Attestation Check FAILED for block #{}",
-                                            number
-                                        );
-                                    }
-                                    Err(e) => {
-                                        confidence = 70.0;
-                                        warn!(
-                                            "⚠️ TEE Signature valid but Attestation verification ERROR for block #{}: {:?}",
-                                            number, e
-                                        );
-                                    }
-                                }
-                            } else {
-                                confidence = 85.0;
-                                warn!(
-                                    "⚠️ Attestation enabled but NO quote found in block #{}",
-                                    number
-                                );
-                            }
-                        }
-                    } else {
-                        warn!(
-                            "⚠️ TEE Signature valid but from unexpected signer: {:?}",
-                            recovered_signer
-                        );
-                    }
-                }
-                Err(e) => {
-                    warn!(
-                        "⚠️ Failed to recover signer from TEE signature for block #{}: {:?}",
-                        number, e
+                if tee_valid {
+                    info!(
+                        "🛡️ TEE Signature Verified for block #{} by expected sequencer",
+                        number
                     );
+                    let confidence = self.check_attestation_confidence(eth_block, number);
+                    (true, confidence, Some(recovered_signer), Some(sig_bytes))
+                } else {
+                    warn!(
+                        "⚠️ TEE Signature valid but from unexpected signer: {:?}",
+                        recovered_signer
+                    );
+                    (false, 0.0, Some(recovered_signer), Some(sig_bytes))
                 }
             }
+            Err(e) => {
+                warn!(
+                    "⚠️ Failed to recover signer from TEE signature for block #{}: {:?}",
+                    number, e
+                );
+                (false, 0.0, None, None)
+            }
         }
-        (tee_valid, confidence, signer, sequencer_signature)
     }
 
+    /// Checks TDX attestation when enabled and returns the appropriate confidence level.
+    /// Assumes TEE signature has already been verified as valid.
+    fn check_attestation_confidence(&self, eth_block: &Block<H256>, number: U256) -> f64 {
+        if !self.config.tee.attestation_enabled {
+            return 90.0;
+        }
+
+        let Some(quote) = extract_quote_from_block(eth_block) else {
+            warn!(
+                "⚠️ Attestation enabled but NO quote found in block #{}",
+                number
+            );
+            return 85.0;
+        };
+
+        match self
+            .tee_verifier
+            .verify_tdx_attestation(&quote, self.config.tee.expected_mrenclave.as_deref())
+        {
+            Ok(true) => {
+                info!("🛡️ TDX Attestation Verified for block #{}", number);
+                99.0
+            }
+            Ok(false) => {
+                warn!(
+                    "⚠️ TEE Signature valid but Attestation Check FAILED for block #{}",
+                    number
+                );
+                45.0
+            }
+            Err(e) => {
+                warn!(
+                    "⚠️ TEE Signature valid but Attestation verification ERROR for block #{}: {:?}",
+                    number, e
+                );
+                70.0
+            }
+        }
+    }
+
+    /// Processes a confirmed hash conflict at a given block number.
+    /// Classifies it as a soft reorg or equivocation, emits an event, and
+    /// applies the appropriate reputation penalty to the signer.
     async fn process_reorg(
         &self,
         number: U256,
@@ -235,36 +244,7 @@ impl FlashMonitor {
         sequencer_signature: &Option<Bytes>,
         signer: &Option<Address>,
     ) -> Result<()> {
-        let mut severity = ReorgSeverity::Soft;
-        let mut equivocation = None;
-
-        // Detect Equivocation: Same block number, different hash, same signer
-        let equivocation_check = (
-            &prev.sequencer_signature,
-            sequencer_signature,
-            &prev.signer,
-            signer,
-        );
-        if let (Some(sig1), Some(sig2), Some(signer1), Some(signer2)) = equivocation_check {
-            #[allow(clippy::collapsible_if)]
-            if signer1 == signer2 {
-                severity = ReorgSeverity::Equivocation;
-                equivocation = Some(EquivocationEvent {
-                    signer: *signer1,
-                    signature_1: sig1.clone(),
-                    signature_2: sig2.clone(),
-                    conflict_analysis: None,
-                });
-                warn!(
-                    "🚨 EQUIVOCATION DETECTED at block #{} by signer {:?}!",
-                    number, signer1
-                );
-            }
-        }
-
-        if severity == ReorgSeverity::Soft {
-            warn!("🚨 Soft Reorg detected at block #{}!", number);
-        }
+        let (severity, equivocation) = classify_reorg(prev, sequencer_signature, signer, number);
 
         let event = ReorgEvent {
             block_number: number,
@@ -276,52 +256,23 @@ impl FlashMonitor {
         };
 
         if severity == ReorgSeverity::Equivocation {
-            let storage = self.storage.clone();
-            let provider = self.provider.clone();
-            let event_clone = event.clone();
-            let guardian = self.guardian_wallet.clone();
-            let sig1 = prev.sequencer_signature.clone().unwrap_or_default();
-            let sig2 = sequencer_signature.clone().unwrap_or_default();
-            let signer_addr = signer.unwrap_or_default();
-            let old_hash = prev.hash;
-            let new_hash = hash;
-            let block_number = number;
-
-            tokio::spawn(async move {
-                if let Err(e) =
-                    analyze_and_update_equivocation(storage, provider, event_clone).await
-                {
-                    warn!("Failed to analyze conflicts: {:?}", e);
-                }
-
-                // Active Fraud Proof Submission
-                if let Some(wallet) = guardian {
-                    info!("🗼 Watchtower: Generating on-chain equivocation proof...");
-                    let proof = proof::encode_equivocation_proof(
-                        block_number,
-                        signer_addr,
-                        sig1,
-                        sig2,
-                        old_hash,
-                        new_hash,
-                    );
-                    match wallet.submit_equivocation_proof(proof).await {
-                        Ok(tx_hash) => info!(
-                            "🚀 ACTIVE PROTECTION: Slashing proof submitted! TX: {:?}",
-                            tx_hash
-                        ),
-                        Err(e) => {
-                            error!("❌ Watchtower FAILED to submit proof: {:?}", e)
-                        }
-                    }
-                }
-            });
+            spawn_watchtower_task(
+                self.storage.clone(),
+                self.provider.clone(),
+                self.guardian_wallet.clone(),
+                event.clone(),
+                prev.sequencer_signature.clone().unwrap_or_default(),
+                sequencer_signature.clone().unwrap_or_default(),
+                signer.unwrap_or_default(),
+                prev.hash,
+                hash,
+                number,
+            );
         }
 
         self.storage.save_reorg(event.clone()).await?;
         let _ = self.event_tx.send(event.clone());
 
-        // Update Reputation Penalties
         if let Some(signer_addr) = signer {
             let (soft, equiv) = if severity == ReorgSeverity::Equivocation {
                 (0, 1)
@@ -347,9 +298,8 @@ impl FlashMonitor {
 
         let (tee_valid, tee_confidence, signer, sequencer_signature) =
             self.verify_tee_signature(&eth_block, hash, number);
-        let mut persistence = 1;
 
-        // Detection of Reorgs and Equivocations
+        let mut persistence = 1;
         if let Some(ref prev) = *last_block_guard {
             if prev.number == number {
                 if prev.hash != hash {
@@ -357,24 +307,11 @@ impl FlashMonitor {
                         .await?;
                 }
             } else if prev.number < number {
-                // Approximate persistence from previous confidence
                 persistence = ((prev.confidence / 100.0).log(0.5).abs().ceil() as u32).max(1) + 1;
             }
         }
 
-        let base_confidence = (1.0 - 0.5f64.powi(persistence as i32)) * 100.0;
-        let final_confidence = if tee_valid {
-            (base_confidence + 99.0) / 2.0
-        } else {
-            base_confidence
-        };
-
-        // Use the TEE-specific override if available, otherwise use final_confidence
-        let confidence = if tee_confidence > 0.0 {
-            tee_confidence
-        } else {
-            final_confidence
-        };
+        let confidence = resolve_confidence(tee_valid, tee_confidence, persistence);
 
         let flash_block = FlashBlock {
             number,
@@ -399,16 +336,14 @@ impl FlashMonitor {
         self.storage.save_block(flash_block.clone()).await?;
         let _ = self.block_tx.send(flash_block.clone());
 
-        // Update Reputation
         if let Some(signer_addr) = signer {
-            let attested = confidence > 95.0; // Phase 5 threshold
+            let attested = confidence > 95.0;
             if let Err(e) = self.update_reputation(signer_addr, 1, 0, 0, attested).await {
                 error!("Failed to update reputation: {:?}", e);
             }
         }
 
         *last_block_guard = Some(flash_block);
-
         Ok(())
     }
 
@@ -420,44 +355,28 @@ impl FlashMonitor {
         equivocations: u64,
         attested: bool,
     ) -> Result<()> {
-        let mut stats = self.storage.get_sequencer_stats(address).await?.unwrap_or(
-            flashstat_common::SequencerStats {
-                address,
-                last_active: Utc::now(),
-                ..Default::default()
-            },
-        );
+        let mut stats =
+            self.storage
+                .get_sequencer_stats(address)
+                .await?
+                .unwrap_or(SequencerStats {
+                    address,
+                    last_active: Utc::now(),
+                    ..Default::default()
+                });
 
-        if blocks > 0 {
-            stats.total_blocks_signed += blocks;
-            stats.current_streak += blocks;
-            if attested {
-                stats.total_attested_blocks += blocks;
-            }
-        }
-
-        if soft_reorgs > 0 || equivocations > 0 {
-            stats.total_soft_reorgs += soft_reorgs;
-            stats.total_equivocations += equivocations;
-            stats.current_streak = 0; // Reset streak on any issue
-        }
+        apply_block_rewards(&mut stats, blocks, attested);
+        apply_misbehaviour_penalties(&mut stats, soft_reorgs, equivocations);
 
         stats.last_active = Utc::now();
-
-        // Calculate score with Refined Weights
-        let base_score = stats.total_blocks_signed as i64;
-        let attestation_bonus = stats.total_attested_blocks as i64; // Permanent +1 for each hardware-backed block
-        let streak_bonus = (stats.current_streak / 100) as i64 * 10;
-
-        let penalty =
-            (stats.total_soft_reorgs as i64 * 50) + (stats.total_equivocations as i64 * 1000);
-
-        stats.reputation_score = base_score + attestation_bonus + streak_bonus - penalty;
+        stats.reputation_score = calculate_reputation_score(&stats);
 
         self.storage.update_sequencer_stats(stats).await?;
         Ok(())
     }
 }
+
+// ── Free-standing helpers ─────────────────────────────────────────────────────
 
 /// Extracts the TEE sequencer signature from a block's extra_data.
 /// In Unichain/OP-Stack, signatures are the last 65 bytes of extra_data.
@@ -497,6 +416,127 @@ pub(crate) fn extract_quote_from_block(block: &Block<H256>) -> Option<Bytes> {
     }
 }
 
+/// Classifies a block-height conflict as either a soft reorg or an equivocation.
+/// Returns the severity and, if applicable, the `EquivocationEvent`.
+fn classify_reorg(
+    prev: &FlashBlock,
+    sequencer_signature: &Option<Bytes>,
+    signer: &Option<Address>,
+    number: U256,
+) -> (ReorgSeverity, Option<EquivocationEvent>) {
+    let equivocation_check = (
+        &prev.sequencer_signature,
+        sequencer_signature,
+        &prev.signer,
+        signer,
+    );
+
+    if let (Some(sig1), Some(sig2), Some(signer1), Some(signer2)) = equivocation_check {
+        if signer1 == signer2 {
+            warn!(
+                "🚨 EQUIVOCATION DETECTED at block #{} by signer {:?}!",
+                number, signer1
+            );
+            return (
+                ReorgSeverity::Equivocation,
+                Some(EquivocationEvent {
+                    signer: *signer1,
+                    signature_1: sig1.clone(),
+                    signature_2: sig2.clone(),
+                    conflict_analysis: None,
+                }),
+            );
+        }
+    }
+
+    warn!("🚨 Soft Reorg detected at block #{}!", number);
+    (ReorgSeverity::Soft, None)
+}
+
+/// Spawns the background task that performs conflict analysis and submits
+/// the on-chain equivocation proof via the guardian wallet if configured.
+#[allow(clippy::too_many_arguments)]
+fn spawn_watchtower_task(
+    storage: Arc<dyn FlashStorage>,
+    provider: Arc<Provider<Http>>,
+    guardian: Option<Arc<wallet::GuardianWallet>>,
+    event: ReorgEvent,
+    sig1: Bytes,
+    sig2: Bytes,
+    signer_addr: Address,
+    old_hash: H256,
+    new_hash: H256,
+    block_number: U256,
+) {
+    tokio::spawn(async move {
+        if let Err(e) = analyze_and_update_equivocation(storage, provider, event).await {
+            warn!("Failed to analyze conflicts: {:?}", e);
+        }
+
+        if let Some(wallet) = guardian {
+            info!("🗼 Watchtower: Generating on-chain equivocation proof...");
+            let encoded_proof = proof::encode_equivocation_proof(
+                block_number,
+                signer_addr,
+                sig1,
+                sig2,
+                old_hash,
+                new_hash,
+            );
+            match wallet.submit_equivocation_proof(encoded_proof).await {
+                Ok(tx_hash) => info!(
+                    "🚀 ACTIVE PROTECTION: Slashing proof submitted! TX: {:?}",
+                    tx_hash
+                ),
+                Err(e) => error!("❌ Watchtower FAILED to submit proof: {:?}", e),
+            }
+        }
+    });
+}
+
+/// Resolves the final block confidence from TEE and persistence signals.
+/// TEE confidence takes priority when non-zero; otherwise falls back to
+/// the persistence-based estimate.
+fn resolve_confidence(tee_valid: bool, tee_confidence: f64, persistence: u32) -> f64 {
+    if tee_confidence > 0.0 {
+        return tee_confidence;
+    }
+    let base = (1.0 - 0.5f64.powi(persistence as i32)) * 100.0;
+    if tee_valid { (base + 99.0) / 2.0 } else { base }
+}
+
+/// Applies block production rewards to a sequencer's stats in place.
+fn apply_block_rewards(stats: &mut SequencerStats, blocks: u64, attested: bool) {
+    if blocks > 0 {
+        stats.total_blocks_signed += blocks;
+        stats.current_streak += blocks;
+        if attested {
+            stats.total_attested_blocks += blocks;
+        }
+    }
+}
+
+/// Applies misbehaviour penalties to a sequencer's stats in place.
+/// Any infraction resets the signing streak to zero.
+fn apply_misbehaviour_penalties(stats: &mut SequencerStats, soft_reorgs: u64, equivocations: u64) {
+    if soft_reorgs > 0 || equivocations > 0 {
+        stats.total_soft_reorgs += soft_reorgs;
+        stats.total_equivocations += equivocations;
+        stats.current_streak = 0;
+    }
+}
+
+/// Calculates the final reputation score from a sequencer's cumulative stats.
+/// Formula: base_blocks + attestation_bonus + streak_bonus - penalties
+pub(crate) fn calculate_reputation_score(stats: &SequencerStats) -> i64 {
+    let base_score = stats.total_blocks_signed as i64;
+    let attestation_bonus = stats.total_attested_blocks as i64;
+    let streak_bonus = (stats.current_streak / 100) as i64 * 10;
+    let penalty = (stats.total_soft_reorgs as i64 * 50) + (stats.total_equivocations as i64 * 1000);
+
+    base_score + attestation_bonus + streak_bonus - penalty
+}
+
 /// Fetches both conflicting blocks and performs transaction-level conflict analysis,
 /// then persists the enriched equivocation event to storage.
 pub(crate) async fn analyze_and_update_equivocation(
@@ -504,13 +544,10 @@ pub(crate) async fn analyze_and_update_equivocation(
     provider: Arc<Provider<Http>>,
     mut event: ReorgEvent,
 ) -> Result<()> {
-    use std::collections::HashMap;
-
     let Some(mut equivocation) = event.equivocation.take() else {
         return Ok(());
     };
 
-    // Fetch full blocks with transactions concurrently
     let (Some(old_block), Some(new_block)) = futures_util::try_join!(
         provider.get_block_with_txs(event.old_hash),
         provider.get_block_with_txs(event.new_hash)
@@ -519,24 +556,35 @@ pub(crate) async fn analyze_and_update_equivocation(
         return Ok(());
     };
 
+    equivocation.conflict_analysis = Some(build_conflict_analysis(&old_block, &new_block));
+    event.equivocation = Some(equivocation);
+
+    storage.save_reorg(event).await?;
+    Ok(())
+}
+
+/// Diffs two conflicting blocks and returns the transaction-level conflict analysis:
+/// which transactions were dropped and which represent potential double-spends.
+fn build_conflict_analysis(
+    old_block: &Block<Transaction>,
+    new_block: &Block<Transaction>,
+) -> ConflictAnalysis {
+    let new_tx_map: HashMap<(Address, U256), H256> = new_block
+        .transactions
+        .iter()
+        .map(|tx| ((tx.from, tx.nonce), tx.hash))
+        .collect();
+
+    let new_tx_hashes: std::collections::HashSet<H256> =
+        new_block.transactions.iter().map(|tx| tx.hash).collect();
+
     let mut dropped_txs = Vec::new();
     let mut double_spend_txs = Vec::new();
 
-    // Map new block transactions by sender:nonce for quick lookup
-    let mut new_tx_map = HashMap::new();
-    for tx in &new_block.transactions {
-        new_tx_map.insert((tx.from, tx.nonce), tx.hash);
-    }
-
     for old_tx in &old_block.transactions {
-        if !new_block
-            .transactions
-            .iter()
-            .any(|tx| tx.hash == old_tx.hash)
-        {
+        if !new_tx_hashes.contains(&old_tx.hash) {
             dropped_txs.push(old_tx.hash);
 
-            // Check if replaced by another tx with the same nonce (Double-Spend)
             if let Some(&new_hash) = new_tx_map.get(&(old_tx.from, old_tx.nonce)) {
                 double_spend_txs.push(DoubleSpendProof {
                     tx_hash_1: old_tx.hash,
@@ -548,13 +596,8 @@ pub(crate) async fn analyze_and_update_equivocation(
         }
     }
 
-    equivocation.conflict_analysis = Some(ConflictAnalysis {
+    ConflictAnalysis {
         dropped_txs,
         double_spend_txs,
-    });
-    event.equivocation = Some(equivocation);
-
-    storage.save_reorg(event).await?;
-
-    Ok(())
+    }
 }
