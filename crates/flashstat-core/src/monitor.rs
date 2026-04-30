@@ -601,3 +601,453 @@ fn build_conflict_analysis(
         double_spend_txs,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use ethers::types::{Address, Block, BlockNumber, Bytes, H256, Transaction, U256};
+    use flashstat_common::{BlockStatus, FlashBlock, ReorgSeverity, SequencerStats};
+
+    // ── Fixtures ──────────────────────────────────────────────────────────────
+
+    fn make_flash_block(sig: Option<Bytes>, signer: Option<Address>) -> FlashBlock {
+        FlashBlock {
+            number: U256::from(100u64),
+            hash: H256::random(),
+            parent_hash: H256::random(),
+            timestamp: Utc::now(),
+            sequencer_signature: sig,
+            signer,
+            confidence: 50.0,
+            status: BlockStatus::Pending,
+        }
+    }
+
+    fn default_stats() -> SequencerStats {
+        SequencerStats {
+            address: Address::random(),
+            last_active: Utc::now(),
+            ..Default::default()
+        }
+    }
+
+    fn make_tx(hash: H256, from: Address, nonce: u64) -> Transaction {
+        Transaction {
+            hash,
+            from,
+            nonce: U256::from(nonce),
+            ..Default::default()
+        }
+    }
+
+    // ── classify_reorg ────────────────────────────────────────────────────────
+
+    #[test]
+    fn classify_reorg_same_signer_is_equivocation() {
+        let signer = Address::random();
+        let sig1 = Bytes::from(vec![0xAA; 65]);
+        let sig2 = Bytes::from(vec![0xBB; 65]);
+
+        let prev = make_flash_block(Some(sig1), Some(signer));
+        let (severity, event) =
+            classify_reorg(&prev, &Some(sig2), &Some(signer), U256::from(100u64));
+
+        assert_eq!(severity, ReorgSeverity::Equivocation);
+        let event = event.expect("equivocation event should be Some");
+        assert_eq!(event.signer, signer);
+        assert_eq!(event.signature_1.len(), 65);
+        assert_eq!(event.signature_2.len(), 65);
+        assert!(event.conflict_analysis.is_none());
+    }
+
+    #[test]
+    fn classify_reorg_different_signers_is_soft() {
+        let prev = make_flash_block(Some(Bytes::from(vec![0xAA; 65])), Some(Address::random()));
+        let (severity, event) = classify_reorg(
+            &prev,
+            &Some(Bytes::from(vec![0xBB; 65])),
+            &Some(Address::random()), // different signer
+            U256::from(100u64),
+        );
+
+        assert_eq!(severity, ReorgSeverity::Soft);
+        assert!(event.is_none());
+    }
+
+    #[test]
+    fn classify_reorg_missing_new_signature_is_soft() {
+        let prev = make_flash_block(Some(Bytes::from(vec![0xAA; 65])), Some(Address::random()));
+        // new block has no signature
+        let (severity, event) = classify_reorg(&prev, &None, &None, U256::from(100u64));
+
+        assert_eq!(severity, ReorgSeverity::Soft);
+        assert!(event.is_none());
+    }
+
+    #[test]
+    fn classify_reorg_missing_prev_signature_is_soft() {
+        let prev = make_flash_block(None, None); // no sig on prev
+        let signer = Address::random();
+        let (severity, event) = classify_reorg(
+            &prev,
+            &Some(Bytes::from(vec![0xBB; 65])),
+            &Some(signer),
+            U256::from(100u64),
+        );
+
+        assert_eq!(severity, ReorgSeverity::Soft);
+        assert!(event.is_none());
+    }
+
+    #[test]
+    fn classify_reorg_equivocation_event_carries_both_signatures() {
+        let signer = Address::random();
+        let sig1 = Bytes::from(vec![0x11; 65]);
+        let sig2 = Bytes::from(vec![0x22; 65]);
+
+        let prev = make_flash_block(Some(sig1.clone()), Some(signer));
+        let (_, event) =
+            classify_reorg(&prev, &Some(sig2.clone()), &Some(signer), U256::from(1u64));
+
+        let e = event.unwrap();
+        assert_eq!(e.signature_1, sig1);
+        assert_eq!(e.signature_2, sig2);
+    }
+
+    // ── resolve_confidence ────────────────────────────────────────────────────
+
+    #[test]
+    fn resolve_confidence_tee_overrides_persistence_when_nonzero() {
+        // TEE confidence of 99.0 must be returned regardless of other inputs
+        let result = resolve_confidence(false, 99.0, 1);
+        assert!((result - 99.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn resolve_confidence_tee_valid_blends_base_with_99() {
+        // TEE confidence = 0, tee_valid = true, persistence = 1
+        // base = (1 - 0.5^1) * 100 = 50.0
+        // expected = (50.0 + 99.0) / 2.0 = 74.5
+        let result = resolve_confidence(true, 0.0, 1);
+        assert!((result - 74.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn resolve_confidence_no_tee_uses_pure_persistence() {
+        // persistence = 1 → base = (1 - 0.5) * 100 = 50.0
+        let result = resolve_confidence(false, 0.0, 1);
+        assert!((result - 50.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn resolve_confidence_persistence_2_gives_75_percent() {
+        // (1 - 0.5^2) * 100 = 75.0
+        let result = resolve_confidence(false, 0.0, 2);
+        assert!((result - 75.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn resolve_confidence_high_persistence_approaches_100() {
+        let result = resolve_confidence(false, 0.0, 10);
+        assert!(
+            result > 99.0,
+            "persistence=10 should give >99% confidence, got {}",
+            result
+        );
+    }
+
+    // ── apply_block_rewards ───────────────────────────────────────────────────
+
+    #[test]
+    fn apply_block_rewards_increments_signed_and_streak() {
+        let mut stats = default_stats();
+        apply_block_rewards(&mut stats, 10, false);
+
+        assert_eq!(stats.total_blocks_signed, 10);
+        assert_eq!(stats.current_streak, 10);
+        assert_eq!(stats.total_attested_blocks, 0);
+    }
+
+    #[test]
+    fn apply_block_rewards_attested_flag_increments_attested_count() {
+        let mut stats = default_stats();
+        apply_block_rewards(&mut stats, 5, true);
+
+        assert_eq!(stats.total_attested_blocks, 5);
+        assert_eq!(stats.total_blocks_signed, 5);
+    }
+
+    #[test]
+    fn apply_block_rewards_not_attested_does_not_increment_attested_count() {
+        let mut stats = default_stats();
+        apply_block_rewards(&mut stats, 5, false);
+
+        assert_eq!(stats.total_attested_blocks, 0);
+    }
+
+    #[test]
+    fn apply_block_rewards_zero_blocks_is_no_op() {
+        let mut stats = default_stats();
+        apply_block_rewards(&mut stats, 0, true);
+
+        assert_eq!(stats.total_blocks_signed, 0);
+        assert_eq!(stats.current_streak, 0);
+        assert_eq!(stats.total_attested_blocks, 0);
+    }
+
+    #[test]
+    fn apply_block_rewards_accumulates_across_calls() {
+        let mut stats = default_stats();
+        apply_block_rewards(&mut stats, 50, false);
+        apply_block_rewards(&mut stats, 50, true);
+
+        assert_eq!(stats.total_blocks_signed, 100);
+        assert_eq!(stats.current_streak, 100);
+        assert_eq!(stats.total_attested_blocks, 50);
+    }
+
+    // ── apply_misbehaviour_penalties ─────────────────────────────────────────
+
+    #[test]
+    fn apply_misbehaviour_penalties_soft_reorg_resets_streak() {
+        let mut stats = default_stats();
+        stats.current_streak = 200;
+
+        apply_misbehaviour_penalties(&mut stats, 1, 0);
+
+        assert_eq!(stats.total_soft_reorgs, 1);
+        assert_eq!(stats.current_streak, 0);
+        assert_eq!(stats.total_equivocations, 0);
+    }
+
+    #[test]
+    fn apply_misbehaviour_penalties_equivocation_resets_streak() {
+        let mut stats = default_stats();
+        stats.current_streak = 999;
+
+        apply_misbehaviour_penalties(&mut stats, 0, 1);
+
+        assert_eq!(stats.total_equivocations, 1);
+        assert_eq!(stats.current_streak, 0);
+        assert_eq!(stats.total_soft_reorgs, 0);
+    }
+
+    #[test]
+    fn apply_misbehaviour_penalties_zero_is_no_op() {
+        let mut stats = default_stats();
+        stats.current_streak = 100;
+
+        apply_misbehaviour_penalties(&mut stats, 0, 0);
+
+        assert_eq!(stats.current_streak, 100, "streak should be unchanged");
+        assert_eq!(stats.total_soft_reorgs, 0);
+        assert_eq!(stats.total_equivocations, 0);
+    }
+
+    #[test]
+    fn apply_misbehaviour_penalties_combined_both_counted() {
+        let mut stats = default_stats();
+        apply_misbehaviour_penalties(&mut stats, 2, 3);
+
+        assert_eq!(stats.total_soft_reorgs, 2);
+        assert_eq!(stats.total_equivocations, 3);
+        assert_eq!(stats.current_streak, 0);
+    }
+
+    // ── calculate_reputation_score ────────────────────────────────────────────
+
+    #[test]
+    fn calculate_reputation_score_base_only() {
+        let mut stats = default_stats();
+        stats.total_blocks_signed = 100;
+        assert_eq!(calculate_reputation_score(&stats), 100);
+    }
+
+    #[test]
+    fn calculate_reputation_score_attestation_bonus_added() {
+        let mut stats = default_stats();
+        stats.total_blocks_signed = 100;
+        stats.total_attested_blocks = 50;
+        // 100 + 50 = 150
+        assert_eq!(calculate_reputation_score(&stats), 150);
+    }
+
+    #[test]
+    fn calculate_reputation_score_streak_bonus_at_100_block_boundary() {
+        let mut stats = default_stats();
+        stats.current_streak = 100;
+        // streak_bonus = (100 / 100) * 10 = 10
+        assert_eq!(calculate_reputation_score(&stats), 10);
+    }
+
+    #[test]
+    fn calculate_reputation_score_streak_bonus_does_not_trigger_below_100() {
+        let mut stats = default_stats();
+        stats.current_streak = 99;
+        // streak_bonus = (99 / 100) * 10 = 0
+        assert_eq!(calculate_reputation_score(&stats), 0);
+    }
+
+    #[test]
+    fn calculate_reputation_score_soft_reorg_deduction() {
+        let mut stats = default_stats();
+        stats.total_blocks_signed = 200;
+        stats.total_soft_reorgs = 2;
+        // 200 - (2 * 50) = 100
+        assert_eq!(calculate_reputation_score(&stats), 100);
+    }
+
+    #[test]
+    fn calculate_reputation_score_equivocation_deduction() {
+        let mut stats = default_stats();
+        stats.total_blocks_signed = 500;
+        stats.total_equivocations = 1;
+        // 500 - 1000 = -500
+        assert_eq!(calculate_reputation_score(&stats), -500);
+    }
+
+    #[test]
+    fn calculate_reputation_score_equivocation_penalty_20x_heavier_than_soft() {
+        let mut soft_stats = default_stats();
+        soft_stats.total_soft_reorgs = 1;
+
+        let mut equiv_stats = default_stats();
+        equiv_stats.total_equivocations = 1;
+
+        let soft_score = calculate_reputation_score(&soft_stats); // -50
+        let equiv_score = calculate_reputation_score(&equiv_stats); // -1000
+
+        assert!(
+            equiv_score < soft_score,
+            "equivocation score should be lower (worse) than soft reorg score"
+        );
+        assert_eq!(
+            equiv_score.abs() / soft_score.abs(),
+            20,
+            "equivocation penalty should be exactly 20× the soft reorg penalty"
+        );
+    }
+
+    #[test]
+    fn calculate_reputation_score_full_formula_combined() {
+        let mut stats = default_stats();
+        stats.total_blocks_signed = 300;
+        stats.total_attested_blocks = 100;
+        stats.current_streak = 200; // streak_bonus = 20
+        stats.total_soft_reorgs = 1; // -50
+        stats.total_equivocations = 0;
+        // 300 + 100 + 20 - 50 = 370
+        assert_eq!(calculate_reputation_score(&stats), 370);
+    }
+
+    // ── build_conflict_analysis ───────────────────────────────────────────────
+
+    fn make_block_with_txs(txs: Vec<Transaction>) -> Block<Transaction> {
+        Block {
+            transactions: txs,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn build_conflict_analysis_shared_tx_not_dropped() {
+        let addr = Address::random();
+        let hash = H256::random();
+        let tx = make_tx(hash, addr, 0);
+
+        let old = make_block_with_txs(vec![tx.clone()]);
+        let new = make_block_with_txs(vec![tx]);
+
+        let analysis = build_conflict_analysis(&old, &new);
+        assert!(
+            analysis.dropped_txs.is_empty(),
+            "shared tx should not be dropped"
+        );
+        assert!(analysis.double_spend_txs.is_empty());
+    }
+
+    #[test]
+    fn build_conflict_analysis_old_only_tx_is_dropped() {
+        let addr = Address::random();
+        let old_hash = H256::random();
+        let new_hash = H256::random();
+
+        let old_tx = make_tx(old_hash, addr, 0);
+        // New block has a completely unrelated tx at a different nonce
+        let new_tx = make_tx(new_hash, Address::random(), 99);
+
+        let old = make_block_with_txs(vec![old_tx]);
+        let new = make_block_with_txs(vec![new_tx]);
+
+        let analysis = build_conflict_analysis(&old, &new);
+        assert_eq!(analysis.dropped_txs.len(), 1);
+        assert_eq!(analysis.dropped_txs[0], old_hash);
+    }
+
+    #[test]
+    fn build_conflict_analysis_same_nonce_replacement_is_double_spend() {
+        let sender = Address::random();
+        let old_hash = H256::random();
+        let new_hash = H256::random();
+        let nonce = 42u64;
+
+        let old_tx = make_tx(old_hash, sender, nonce);
+        let new_tx = make_tx(new_hash, sender, nonce); // same sender + nonce
+
+        let old = make_block_with_txs(vec![old_tx]);
+        let new = make_block_with_txs(vec![new_tx]);
+
+        let analysis = build_conflict_analysis(&old, &new);
+        assert_eq!(analysis.dropped_txs.len(), 1);
+        assert_eq!(analysis.double_spend_txs.len(), 1);
+
+        let ds = &analysis.double_spend_txs[0];
+        assert_eq!(ds.tx_hash_1, old_hash);
+        assert_eq!(ds.tx_hash_2, new_hash);
+        assert_eq!(ds.sender, sender);
+        assert_eq!(ds.nonce, U256::from(nonce));
+    }
+
+    #[test]
+    fn build_conflict_analysis_empty_blocks_give_empty_result() {
+        let old = make_block_with_txs(vec![]);
+        let new = make_block_with_txs(vec![]);
+
+        let analysis = build_conflict_analysis(&old, &new);
+        assert!(analysis.dropped_txs.is_empty());
+        assert!(analysis.double_spend_txs.is_empty());
+    }
+
+    #[test]
+    fn build_conflict_analysis_multiple_drops_and_double_spends() {
+        let sender = Address::random();
+
+        // Old block: 3 txs — one shared, one dropped cleanly, one double-spend
+        let shared_hash = H256::random();
+        let dropped_hash = H256::random();
+        let ds_old_hash = H256::random();
+        let ds_new_hash = H256::random();
+
+        let shared_tx = make_tx(shared_hash, Address::random(), 0);
+        let dropped_tx = make_tx(dropped_hash, Address::random(), 1);
+        let ds_old_tx = make_tx(ds_old_hash, sender, 5);
+
+        // New block: shared tx + double-spend replacement
+        let ds_new_tx = make_tx(ds_new_hash, sender, 5);
+
+        let old = make_block_with_txs(vec![shared_tx.clone(), dropped_tx, ds_old_tx]);
+        let new = make_block_with_txs(vec![shared_tx, ds_new_tx]);
+
+        let analysis = build_conflict_analysis(&old, &new);
+
+        // shared_tx is NOT dropped
+        assert!(!analysis.dropped_txs.contains(&shared_hash));
+        // dropped_tx is dropped but not a double-spend (no replacement at same nonce)
+        assert!(analysis.dropped_txs.contains(&dropped_hash));
+        // ds_old_tx is dropped AND a double-spend
+        assert!(analysis.dropped_txs.contains(&ds_old_hash));
+        assert_eq!(analysis.double_spend_txs.len(), 1);
+        assert_eq!(analysis.double_spend_txs[0].tx_hash_2, ds_new_hash);
+    }
+}
