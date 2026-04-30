@@ -5,7 +5,7 @@ use flashstat_common::{
     Config, FlashBlock, ReorgEvent, ReorgSeverity, SequencerStats, SystemHealth,
 };
 use flashstat_db::FlashStorage;
-use jsonrpsee::core::{RpcResult, async_trait};
+use jsonrpsee::core::{async_trait, RpcResult};
 use jsonrpsee::server::ServerBuilder;
 use jsonrpsee::types::error::ErrorObjectOwned;
 use std::sync::Arc;
@@ -97,10 +97,7 @@ impl FlashApiServer for FlashServer {
         Ok(stats)
     }
 
-    async fn ingest_block(
-        &self,
-        block: ethers::types::Block<ethers::types::H256>,
-    ) -> RpcResult<()> {
+    async fn ingest_block(&self, block: ethers::types::Block<ethers::types::H256>) -> RpcResult<()> {
         self.monitor
             .handle_new_block(block)
             .await
