@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="logo.png" alt="FlashStat Logo" width="250" />
+</div>
+
 # FlashStat
 
 **FlashStat** is a real-time Unichain sequencer monitoring and fraud detection system. It watches the OP-Stack sequencer for misbehaviour — soft reorgs, equivocations, and double-spend attempts — and can autonomously submit on-chain slashing proofs via a Guardian Wallet when a violation is detected.
