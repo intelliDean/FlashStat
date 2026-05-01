@@ -607,7 +607,7 @@ fn build_conflict_analysis(
 mod tests {
     use super::*;
     use chrono::Utc;
-    use ethers::types::{Address, Block, Bytes, Transaction, H256, U256};
+    use ethers::types::{Address, Block, Bytes, H256, Transaction, U256};
     use flashstat_common::{BlockStatus, FlashBlock, ReorgSeverity, SequencerStats};
 
     // ── Fixtures ──────────────────────────────────────────────────────────────

@@ -10,7 +10,7 @@ fn init_logging() {
 
 fn load_configuration() -> Result<Config> {
     let config = Config::load().context(
-        "Failed to load configuration. Ensure flashstat.toml exists or env vars are set.",
+        "Failed to load configuration. Ensure flashstat.toml exists or env vars are set!",
     )?;
     info!("🏮 Config loaded: WS={}", config.rpc.ws_url);
     Ok(config)
