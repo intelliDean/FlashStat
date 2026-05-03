@@ -1,0 +1,19 @@
+{
+  "name": "flashstat-sdk-workspace",
+  "private": true,
+  "version": "0.0.0",
+  "description": "FlashStat TypeScript SDK monorepo",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "clean": "pnpm -r clean"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  },
+  "engines": {
+    "node": ">=18",
+    "pnpm": ">=9"
+  }
+}

@@ -12,6 +12,10 @@ The system combines cryptographic TEE (Intel TDX) attestation verification with 
 
 ## Table of Contents
 
+- [TypeScript SDK](#typescript-sdk)
+  - [@flashstat/core](#flashstatcore)
+  - [@flashstat/viem](#flashstatviem)
+  - [@flashstat/react](#flashstatreact)
 - [Features](#features)
 - [Architecture](#architecture)
 - [Workspace Layout](#workspace-layout)
@@ -59,6 +63,135 @@ The system combines cryptographic TEE (Intel TDX) attestation verification with 
 | **JSON-RPC server** | Full request/response API plus WebSocket pub/sub for live block and reorg streams |
 | **Terminal UI** | Live dashboard with block feed, confidence bar, sequencer leaderboard, and reorg log |
 | **Persistent storage** | Embedded [redb](https://github.com/cberner/redb) key-value database — no external dependencies |
+
+---
+
+## TypeScript SDK
+
+FlashStat ships three TypeScript packages for integrating real-time block confidence into any JavaScript application. All packages are located in `sdks/typescript/`.
+
+| Package | Install | For |
+|---|---|---|
+| `@flashstat/core` | Zero dependencies | Any Node.js / browser app |
+| `@flashstat/viem` | Peer: `viem >=2` | OP-Stack / Unichain builders |
+| `@flashstat/react` | Peer: `react >=18` | dApp frontends |
+
+### @flashstat/core
+
+The standalone HTTP + WebSocket client. No external dependencies.
+
+```typescript
+import { FlashStatClient } from '@flashstat/core';
+
+const client = new FlashStatClient({ url: 'http://127.0.0.1:9944' });
+
+// Query confidence for a specific block hash
+const confidence = await client.getConfidence('0xabc...');
+if (confidence > 95) {
+  console.log('✓ Safe to act — high-confidence Flashblock');
+}
+
+// Subscribe to live blocks
+const unsub = client.subscribeBlocks((block) => {
+  console.log(`Block #${block.number} — ${block.confidence.toFixed(1)}% (${block.status})`);
+});
+
+// Subscribe to reorg / equivocation events
+client.subscribeEvents((event) => {
+  if (event.severity === 'Equivocation') {
+    console.error('🚨 Sequencer equivocation at block', event.blockNumber);
+  }
+});
+
+// Clean up
+unsub();
+client.destroy();
+```
+
+### @flashstat/viem
+
+Extends any Viem `PublicClient` with FlashStat actions — one line of setup.
+
+```typescript
+import { createPublicClient, http } from 'viem';
+import { unichain } from 'viem/chains';
+import { flashStatActions } from '@flashstat/viem';
+
+const client = createPublicClient({
+  chain: unichain,
+  transport: http(),
+}).extend(flashStatActions({ url: 'http://127.0.0.1:9944' }));
+
+// All standard Viem methods still work, plus:
+const confidence  = await client.getFlashConfidence('0xabc...');
+const latest      = await client.getLatestFlashBlock();
+const reorgs      = await client.getFlashRecentReorgs(10);
+const rankings    = await client.getFlashSequencerRankings();
+```
+
+### @flashstat/react
+
+React hooks and a context provider for live UI updates.
+
+```tsx
+import { FlashStatProvider, useFlashConfidence, useReorgEvents } from '@flashstat/react';
+
+// 1. Wrap your app once
+function App() {
+  return (
+    <FlashStatProvider url="http://127.0.0.1:9944">
+      <YourApp />
+    </FlashStatProvider>
+  );
+}
+
+// 2. Use hooks anywhere in the tree
+function TransactionStatus({ hash }: { hash: string }) {
+  const { confidence, status, isLoading } = useFlashConfidence(hash);
+
+  if (isLoading) return <Spinner />;
+
+  return (
+    <div>
+      <p>Status: {status}</p>
+      <p>Confidence: {confidence.toFixed(1)}%</p>
+      {confidence > 95 && <p>✅ Safe to proceed</p>}
+    </div>
+  );
+}
+
+// 3. Alert users to reorg events in real time
+function ReorgAlert() {
+  const { events } = useReorgEvents(5);
+  const equivocations = events.filter(e => e.severity === 'Equivocation');
+
+  if (equivocations.length === 0) return null;
+  return <Banner>🚨 Sequencer equivocation detected!</Banner>;
+}
+```
+
+**Available hooks:**
+
+| Hook | Description |
+|---|---|
+| `useFlashConfidence(hash)` | Live-updating confidence score for a block hash |
+| `useLatestFlashBlock()` | Most recent block, updated via WebSocket |
+| `useReorgEvents(limit?)` | Recent reorg/equivocation events, live-updated |
+| `useSequencerRankings(pollMs?)` | Reputation leaderboard, polled on an interval |
+| `useFlashHealth(pollMs?)` | Node health snapshot |
+
+#### Running the Next.js Example
+
+```bash
+# Terminal 1 — start the Rust server
+cargo run --release --bin flashstat-server
+
+# Terminal 2 — start the dashboard
+cd sdks/typescript/examples/nextjs-dashboard
+npm install && npm run dev
+
+# Open http://localhost:3000
+```
 
 ---
 
