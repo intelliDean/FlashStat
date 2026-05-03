@@ -6,7 +6,7 @@
 
 **FlashStat** is a real-time Unichain sequencer monitoring and fraud detection system. It watches the OP-Stack sequencer for misbehaviour — soft reorgs, equivocations, and double-spend attempts — and can autonomously submit on-chain slashing proofs via a Guardian Wallet when a violation is detected.
 
-The system combines cryptographic TEE (Intel TDX) attestation verification with a persistent block-confidence model and a live reputation scoring engine for sequencer addresses, surfaced through a JSON-RPC API and a terminal dashboard.
+The system combines cryptographic TEE (Intel TDX) attestation verification with a persistent block-confidence model and a live reputation scoring engine for sequencer addresses, surfaced through a JSON-RPC API, a terminal dashboard, and a production-ready Docker suite.
 
 ---
 
@@ -259,6 +259,28 @@ FlashStat/
     ├── flashstat-db/           # RedbStorage persistence layer
     └── flashstat-api/          # jsonrpsee #[rpc] trait definition
 ```
+
+---
+
+## Quick Start with Docker
+
+The fastest way to run the entire FlashStat infrastructure (Server + Watchtower) is using Docker Compose.
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/One-Block-Org/FlashStat.git
+cd FlashStat
+
+# 2. Configure your RPC endpoints in flashstat.toml (optional)
+# or set environment variables
+
+# 3. Spin up the infrastructure
+docker compose up -d
+```
+
+This will launch:
+- **`server`**: The RPC/WebSocket API on `localhost:9944`.
+- **`watchtower`**: The active monitoring agent connected to the server.
 
 ---
 

@@ -1,0 +1,29 @@
+
+services:
+  # The main FlashStat RPC & WebSocket Server
+  server:
+    build: .
+    image: flashstat-server:latest
+    ports:
+      - "9944:9944"
+    volumes:
+      - flashstat-data:/app/data
+    environment:
+      - RUST_LOG=info
+      - FLASHSTAT_HOST=0.0.0.0
+      - FLASHSTAT_PORT=9944
+    restart: unless-stopped
+
+  # The Active Watchtower / Monitor
+  watchtower:
+    build: .
+    image: flashstat-server:latest # Uses same image, different CMD
+    command: ["flashstat", "--rpc-url", "http://server:9944"]
+    depends_on:
+      - server
+    environment:
+      - RUST_LOG=info
+    restart: unless-stopped
+
+volumes:
+  flashstat-data:

@@ -1,0 +1,7 @@
+# .dockerignore
+target/
+sdks/
+.git/
+node_modules/
+**/*.rs.bk
+data/
