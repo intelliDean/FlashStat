@@ -1,6 +1,6 @@
 {
   "name": "@flashstat/viem",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Viem client extension for FlashStat — add real-time Flashblock confidence to any Viem client",
   "keywords": ["unichain", "viem", "flashblocks", "op-stack", "confidence", "watchtower"],
   "license": "MIT",

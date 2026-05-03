@@ -1,6 +1,6 @@
 {
   "name": "@flashstat/core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Zero-dependency TypeScript client for the FlashStat JSON-RPC & WebSocket API",
   "keywords": ["unichain", "flashblocks", "watchtower", "tee", "confidence", "blockchain"],
   "license": "MIT",

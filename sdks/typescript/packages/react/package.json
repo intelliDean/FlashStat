@@ -1,6 +1,6 @@
 {
   "name": "@flashstat/react",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "React hooks for real-time Unichain Flashblock confidence via FlashStat",
   "keywords": ["unichain", "react", "hooks", "flashblocks", "confidence", "watchtower"],
   "license": "MIT",
