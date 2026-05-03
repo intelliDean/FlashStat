@@ -53,10 +53,10 @@ By using `@flashstat/viem`, you keep your codebase idiomatic. You don't need to 
 
 ## 🔗 Links
 
-- **Main Repository**: [github.com/intelliDean/FlashStat](https://github.com/intelliDean/FlashStat)
+- **Main Repository**: [github.com/One-Block-Org/FlashStat](https://github.com/One-Block-Org/FlashStat)
 - **Core Library**: [@flashstat/core](https://www.npmjs.com/package/@flashstat/core)
 - **React Hooks**: [@flashstat/react](https://www.npmjs.com/package/@flashstat/react)
 
 ## 📄 License
 
-MIT © [intelliDean](https://github.com/intelliDean)
+MIT © [One Block](https://github.com/One-Block-Org)

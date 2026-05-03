@@ -79,10 +79,10 @@ const unsub = client.subscribeBlocks((block) => {
 
 ## 🔗 Links
 
-- **Main Repository**: [github.com/intelliDean/FlashStat](https://github.com/intelliDean/FlashStat)
-- **Documentation**: [FlashStat Wiki](https://github.com/intelliDean/FlashStat#readme)
-- **Example App**: [Next.js Dashboard Example](https://github.com/intelliDean/FlashStat/tree/main/sdks/typescript/examples/nextjs-dashboard)
+- **Main Repository**: [github.com/One-Block-Org/FlashStat](https://github.com/One-Block-Org/FlashStat)
+- **Documentation**: [FlashStat Wiki](https://github.com/One-Block-Org/FlashStat#readme)
+- **Example App**: [Next.js Dashboard Example](https://github.com/One-Block-Org/FlashStat/tree/main/sdks/typescript/examples/nextjs-dashboard)
 
 ## 📄 License
 
-MIT © [intelliDean](https://github.com/intelliDean)
+MIT © [One Block](https://github.com/One-Block-Org)

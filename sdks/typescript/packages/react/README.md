@@ -77,10 +77,10 @@ export function LiveFeed() {
 
 ## 🔗 Links
 
-- **Main Repository**: [github.com/intelliDean/FlashStat](https://github.com/intelliDean/FlashStat)
-- **Demo Dashboard**: [Next.js Reference Implementation](https://github.com/intelliDean/FlashStat/tree/main/sdks/typescript/examples/nextjs-dashboard)
+- **Main Repository**: [github.com/One-Block-Org/FlashStat](https://github.com/One-Block-Org/FlashStat)
+- **Demo Dashboard**: [Next.js Reference Implementation](https://github.com/One-Block-Org/FlashStat/tree/main/sdks/typescript/examples/nextjs-dashboard)
 - **Core SDK**: [@flashstat/core](https://www.npmjs.com/package/@flashstat/core)
 
 ## 📄 License
 
-MIT © [intelliDean](https://github.com/intelliDean)
+MIT © [One Block](https://github.com/One-Block-Org)
