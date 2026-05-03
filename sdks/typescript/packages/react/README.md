@@ -1,61 +1,86 @@
 # @flashstat/react
 
-React hooks and context provider for **FlashStat**. Build real-time, high-confidence dApps on Unichain with ease.
+> **React Hooks and Context for FlashStat — Real-time Unichain block confidence for modern dApps.**
 
-## Installation
+`@flashstat/react` provides a seamless way to integrate **FlashStat's** real-time TEE-attested data into your React applications. It manages WebSocket connections, subscription state, and loading cycles automatically.
+
+## 📦 Installation
 
 ```bash
 npm install @flashstat/react @flashstat/core
 ```
 
-## Features
+## 🚀 Quick Start
 
-- **Real-time Hooks**: Live-updating confidence scores and block data via WebSockets.
-- **Shared State**: The `FlashStatProvider` manages a single optimized connection for your entire app.
-- **Simple API**: Easy-to-use hooks like `useFlashConfidence` and `useLatestFlashBlock`.
-
-## Quick Start
-
-### 1. Wrap your App
+### 1. Setup the Provider
+Wrap your application (usually in `layout.tsx` or `_app.tsx`) with the `FlashStatProvider`.
 
 ```tsx
 import { FlashStatProvider } from '@flashstat/react';
 
-function App() {
+export default function RootLayout({ children }) {
   return (
-    <FlashStatProvider url="http://localhost:9944">
-      <YourDashboard />
-    </FlashStatProvider>
+    <html lang="en">
+      <body>
+        <FlashStatProvider url="http://localhost:9944">
+          {children}
+        </FlashStatProvider>
+      </body>
+    </html>
   );
 }
 ```
 
 ### 2. Use the Hooks
+Access live-streaming data anywhere in your component tree.
 
 ```tsx
 import { useFlashConfidence, useLatestFlashBlock } from '@flashstat/react';
 
-function YourDashboard() {
+export function ConfidenceBadge({ hash }: { hash: string }) {
+  const { confidence, status, isLoading } = useFlashConfidence(hash);
+
+  if (isLoading) return <span>Loading...</span>;
+
+  return (
+    <div className={`badge ${status}`}>
+      Confidence: {confidence.toFixed(2)}%
+    </div>
+  );
+}
+
+export function LiveFeed() {
   const { block } = useLatestFlashBlock();
-  const { confidence, status } = useFlashConfidence(block?.hash);
 
   return (
     <div>
-      <p>Latest Block: {block?.number}</p>
-      <p>Confidence: {confidence}% ({status})</p>
+      <h3>Latest Unichain Block: {block?.number}</h3>
+      <p>Hash: {block?.hash}</p>
     </div>
   );
 }
 ```
 
-## Available Hooks
+## 🛠 Available Hooks
 
-- `useFlashConfidence(hash)`: Returns live-updating confidence for a hash.
-- `useLatestFlashBlock()`: Returns the most recent block from the stream.
-- `useReorgEvents(limit)`: List of recent reorg alerts.
-- `useSequencerRankings(pollInterval)`: Live leaderboard of sequencer scores.
-- `useFlashHealth()`: Node health monitoring.
+- **`useLatestFlashBlock()`**: Streams the most recent block processed by the monitor.
+- **`useFlashConfidence(hash)`**: Returns a live-updating confidence score for a specific block hash.
+- **`useReorgEvents(limit)`**: Provides a stream of reorg and sequencer equivocation alerts.
+- **`useSequencerRankings(pollInterval)`**: Returns the live reputation leaderboard.
+- **`useFlashHealth()`**: Monitors the health and uptime of the connected FlashStat node.
 
-## License
+## 💡 Why use the React Hooks?
 
-MIT
+- **Efficient Connectivity**: Opens only one WebSocket connection shared across all hooks.
+- **Automatic Lifecycle**: Handles connection opening on mount and cleanup on unmount.
+- **Reactive UI**: Your UI updates instantly as the TEE publishes new confidence attestations.
+
+## 🔗 Links
+
+- **Main Repository**: [github.com/intelliDean/FlashStat](https://github.com/intelliDean/FlashStat)
+- **Demo Dashboard**: [Next.js Reference Implementation](https://github.com/intelliDean/FlashStat/tree/main/sdks/typescript/examples/nextjs-dashboard)
+- **Core SDK**: [@flashstat/core](https://www.npmjs.com/package/@flashstat/core)
+
+## 📄 License
+
+MIT © [intelliDean](https://github.com/intelliDean)

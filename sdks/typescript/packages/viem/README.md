@@ -1,20 +1,18 @@
 # @flashstat/viem
 
-A lightweight [Viem](https://viem.sh) extension for **FlashStat**, enabling cryptographic block confidence checks directly on your Viem Public Client.
+> **Native Viem Actions for FlashStat — Cryptographic block confidence directly in your Ethereum client.**
 
-## Installation
+This package extends [Viem](https://viem.sh) with custom actions to interact with a **FlashStat** monitor. It allows you to gate your dApp's UI or backend logic on TEE-attested block confidence scores.
+
+## 📦 Installation
 
 ```bash
 npm install @flashstat/viem @flashstat/core
 ```
 
-## Features
+## 🚀 Usage
 
-- **Seamless Integration**: Extends any standard Viem client with `flashStatActions`.
-- **Familiar API**: Uses the same patterns as other Viem extensions.
-- **Type-Safe**: Full type inference for all extended actions.
-
-## Quick Start
+Extend your existing Viem `PublicClient` with `flashStatActions`.
 
 ```typescript
 import { createPublicClient, http } from 'viem';
@@ -24,23 +22,41 @@ import { flashStatActions } from '@flashstat/viem';
 const client = createPublicClient({
   chain: mainnet,
   transport: http(),
-}).extend(flashStatActions({ url: 'http://localhost:9944' }));
+}).extend(flashStatActions({ 
+  url: 'http://localhost:9944' 
+}));
 
-// Use standard Viem client with FlashStat powers!
-const confidence = await client.getFlashConfidence('0xabc...');
-const latestBlock = await client.getLatestFlashBlock();
-const rankings = await client.getFlashSequencerRankings();
+// Now use FlashStat methods alongside standard Viem methods
+async function checkTransaction(hash: `0x${string}`) {
+  const confidence = await client.getFlashConfidence(hash);
+  
+  if (confidence > 99.9) {
+    console.log("Transaction is cryptographically secure via FlashStat!");
+  }
+}
 ```
 
-## Available Actions
+## 🛠 Available Actions
 
-- `getFlashConfidence(hash)`
-- `getLatestFlashBlock()`
-- `getFlashRecentReorgs(limit)`
-- `getFlashEquivocations(limit)`
-- `getFlashHealth()`
-- `getFlashSequencerRankings()`
+All actions are prefixed with `getFlash` or similar to avoid collisions with standard Viem methods:
 
-## License
+- **`getFlashConfidence(hash)`**: Fetch the 0-100 confidence score for any hash.
+- **`getLatestFlashBlock()`**: Get the most recent TEE-monitored block.
+- **`getFlashRecentReorgs(limit)`**: Get the history of soft or deep reorgs.
+- **`getFlashEquivocations(limit)`**: Filter specifically for sequencer double-signing events.
+- **`getFlashSequencerRankings()`**: View the reputation leaderboard for Unichain sequencers.
+- **`getFlashHealth()`**: Check the status of the FlashStat infrastructure node.
 
-MIT
+## 📖 Why use the Viem Extension?
+
+By using `@flashstat/viem`, you keep your codebase idiomatic. You don't need to manage a separate `FlashStatClient` instance; all the data you need for Unichain block confidence is available directly on your primary blockchain client.
+
+## 🔗 Links
+
+- **Main Repository**: [github.com/intelliDean/FlashStat](https://github.com/intelliDean/FlashStat)
+- **Core Library**: [@flashstat/core](https://www.npmjs.com/package/@flashstat/core)
+- **React Hooks**: [@flashstat/react](https://www.npmjs.com/package/@flashstat/react)
+
+## 📄 License
+
+MIT © [intelliDean](https://github.com/intelliDean)
