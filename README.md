@@ -43,6 +43,8 @@ The system combines cryptographic TEE (Intel TDX) attestation verification with 
 - [Crate Reference](#crate-reference)
 - [Testing](#testing)
 - [CI](#ci)
+- [Contributing](#contributing)
+- [License](#license)
 - [Development Notes](#development-notes)
 
 ---
@@ -183,8 +185,11 @@ function ReorgAlert() {
 #### Running the Next.js Example
 
 ```bash
-# Terminal 1 — start the Rust server
-cargo run --release --bin flashstat-server
+# Terminal 1 — start the Rust server (Docker is easiest)
+docker compose up -d
+
+# Alternatively, run from source:
+# cargo run --release --bin flashstat-server
 
 # Terminal 2 — start the dashboard
 cd sdks/typescript/examples/nextjs-dashboard
@@ -795,6 +800,14 @@ GitHub Actions runs on every push to `main` and `dean`, and on all pull requests
 All Clippy warnings are treated as hard errors in CI.
 
 ---
+
+## Contributing
+
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions and coding standards.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Development Notes
 
